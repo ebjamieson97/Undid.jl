@@ -1,0 +1,64 @@
+function local_silo_regression(silo, post_col, outcome_col; columns = nothing, intercept = false)
+
+    post = silo[!, Symbol.(post_col)]
+    outcome = silo[!, Symbol.(outcome_col)]
+
+
+    if intercept == false
+        X = convert(Matrix{Float64},hcat(1 .- post, post))
+    else
+        X = convert(Matrix{Float64},hcat(fill(1,nrow(silo)), post))
+    end 
+
+    if columns !== nothing 
+        columns = Symbol.(columns)
+        X = hcat(X, Matrix(silo[:, columns]))
+    end 
+
+    Y = outcome
+    beta_hat = X\Y 
+
+    if intercept == false
+        lambda_pre = beta_hat[1]
+        lambda_post = beta_hat[2]
+        gamma = lambda_post - lambda_pre
+    else
+        gamma = beta_hat[2]
+    end
+
+    residuals = Y - X * beta_hat
+    sigma_sq = sum(residuals.^2) / (length(residuals) - length(beta_hat))
+    X = convert(Matrix{Float64}, X)
+    
+
+    cov_beta_hat = zeros(size(X, 2), size(X, 2))
+    try
+        cov_beta_hat = sigma_sq * inv(X' * X)
+    catch ex 
+        if isa(ex, SingularException)
+            det_Gram = det(X' * X)
+            println("Warning!! Gram matrix (X' * X) is singular (det = $det_Gram), using pseudoinverse instead.")
+            cov_beta_hat = sigma_sq * pinv(X' * X)
+        else
+            println("Unexpected error occurred:", ex)
+            rethrow(ex)
+        end
+    end 
+
+    if intercept == false
+        gamma_var = cov_beta_hat[1,1] + cov_beta_hat[2,2] - 2*cov_beta_hat[1,2]
+    else
+        gamma_var = gamma_var = cov_beta_hat[2,2]
+    end 
+
+    return [gamma, gamma_var]
+end 
+
+function undid(treated, untreated)
+
+    UNDID_ATT = treated[1] - untreated[1]
+
+    UNDID_ATT_SE = sqrt(treated[2] + untreated[2])
+
+    return [UNDID_ATT, UNDID_ATT_SE]
+end
