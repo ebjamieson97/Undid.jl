@@ -2,6 +2,7 @@ module UNDID
 
 using Statistics
 using LinearAlgebra
+using DataFrames
 
 export local_silo_regression, undid
 
@@ -58,16 +59,16 @@ function local_silo_regression(silo, post_col, outcome_col; columns = 0, interce
         gamma_var = gamma_var = cov_beta_hat[2,2]
     end 
 
-    return [gamma, gamma_var]
+    return DataFrame(gamma1 = [gamma], gamma1_var = [gamma_var])
 end 
 
 function undid(treated, untreated)
 
-    UNDID_ATT = treated[1] - untreated[1]
+    UNDID_ATT = treated.gamma1 - untreated.gamma1
 
-    UNDID_ATT_SE = sqrt(treated[2] + untreated[2])
+    UNDID_ATT_SE = sqrt(treated.gamma1_var + untreated.gamma1_var)
 
-    return [UNDID_ATT, UNDID_ATT_SE]
+    return DataFrame(UNDID_ATT = [UNDID_ATT], SE_UNDID_ATT = [UNDID_ATT_SE])
 end
 
 
