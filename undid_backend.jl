@@ -66,7 +66,7 @@ function undid(treated, untreated)
 
     UNDID_ATT = treated.gamma1 - untreated.gamma1
 
-    UNDID_ATT_SE = sqrt(treated.gamma1_var + untreated.gamma1_var)
+    UNDID_ATT_SE = sqrt((treated.gamma1_var + untreated.gamma1_var)[1])
 
     return DataFrame(UNDID_ATT = [UNDID_ATT], SE_UNDID_ATT = [UNDID_ATT_SE])
 end
