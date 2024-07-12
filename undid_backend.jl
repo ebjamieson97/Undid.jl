@@ -1,16 +1,23 @@
-function local_silo_regression(silo, post_col, outcome_col; columns = nothing, intercept = false)
+module UNDID
+
+using Statistics
+using LinearAlgebra
+
+export local_silo_regression, undid
+
+function local_silo_regression(silo, post_col, outcome_col; columns = 0, intercept = 0)
 
     post = silo[!, Symbol.(post_col)]
     outcome = silo[!, Symbol.(outcome_col)]
 
 
-    if intercept == false
+    if intercept == 0
         X = convert(Matrix{Float64},hcat(1 .- post, post))
     else
         X = convert(Matrix{Float64},hcat(fill(1,nrow(silo)), post))
     end 
 
-    if columns !== nothing 
+    if columns !== 0 
         columns = Symbol.(columns)
         X = hcat(X, Matrix(silo[:, columns]))
     end 
@@ -62,3 +69,6 @@ function undid(treated, untreated)
 
     return [UNDID_ATT, UNDID_ATT_SE]
 end
+
+
+end 
