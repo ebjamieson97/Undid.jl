@@ -18,7 +18,9 @@ function local_silo_regression(silo, post_col, outcome_col; columns = 0, interce
         X = convert(Matrix{Float64},hcat(fill(1,nrow(silo)), post))
     end 
 
-    if columns !== 0 
+    if columns == 0 
+        # Do nothing
+    else
         columns = Symbol.(columns)
         X = hcat(X, Matrix(silo[:, columns]))
     end 
