@@ -7,11 +7,7 @@ using DelimitedFiles
 
 export create_init_csv, create_diff_df
 
-"""
 
-Takes in vectors of equal lengths and creates the initializing .csv required for UNDID.
-
-"""
 function create_init_csv(names=[], start_times=[], end_times=[], treatment_times=[])
     
     # Check input vectors are the same length
@@ -52,10 +48,7 @@ function create_init_csv(names=[], start_times=[], end_times=[], treatment_times
 end 
 
 
-"""
-Takes in a filepath to the .csv created with create_init_csv and uses that information to create a
-dataframe thats shows all the differences that must be calculated for each group.
-"""
+
 function create_diff_df(csv)
 
     data = readdlm(csv, ',')
