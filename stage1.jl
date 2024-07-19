@@ -1,11 +1,13 @@
+module stage1
+
 using Statistics
 using LinearAlgebra
 using DataFrames
 using DelimitedFiles
 
+export create_init_csv, create_diff_df
 
 """
-    create_init_csv(names, start_times, end_times, treatment_times)
 
 Takes in vectors of equal lengths and creates the initializing .csv required for UNDID.
 
@@ -50,15 +52,6 @@ function create_init_csv(names=[], start_times=[], end_times=[], treatment_times
 end 
 
 
-
-names = ["ON","QC","BC","SK"]
-start_times = [2012,2012,2012,2012]
-end_times = [2014,2014,2014,2014]
-treatment_times = [2013, 0, 2014, 0]
-
-
-csv = create_init_csv(names, start_times, end_times, treatment_times)
-
 """
 Takes in a filepath to the .csv created with create_init_csv and uses that information to create a
 dataframe thats shows all the differences that must be calculated for each group.
@@ -71,8 +64,11 @@ function create_diff_df(csv)
     df = DataFrame(rows, Symbol.(header))
 
     
+    
     header = ["Silo Name", "gvar", "treat", "diff_years"]
-    data = [header]
+    column_types = [Any, Int, Int, Tuple]
+    diff_df = DataFrame([Symbol(header[i]) => Vector{column_types[i]}() for i in 1:length(header)])
+
 
     
     for group in df[:, "Silo Name"]
@@ -89,21 +85,17 @@ function create_diff_df(csv)
         end 
 
         for i in 1:length(combinations)
-            push!(data, [string(group), string(combinations[i][2]+1), string(treat), string(combinations[i])])
+            push!(diff_df, [group, combinations[i][2]+1, treat, combinations[i]])
         end 
    
     end
 
-    header = data[1, :][1]
-    rows = data[2:end]
-
-    df = DataFrame([Symbol(h) => [row[i] for row in rows] for (i, h) in enumerate(header)])
+    df = diff_df
 
     # Remove any rows for which the difference is calcuable for a treatment group but does exist for a control group
     # and vice versa
-    unpaired_years = union(setdiff(df[df[!, "treat"] .== "1", "diff_years"], df[df[!, "treat"] .== "0", "diff_years"]),setdiff(df[df[!, "treat"] .== "0", "diff_years"], df[df[!, "treat"] .== "1", "diff_years"]))
+    unpaired_years = union(setdiff(df[df[!, "treat"] .== 1, "diff_years"], df[df[!, "treat"] .== 0, "diff_years"]),setdiff(df[df[!, "treat"] .== 0, "diff_years"], df[df[!, "treat"] .== 1, "diff_years"]))
     filter!(row -> !(row.diff_years in unpaired_years), df)
-
     
     df.diff_estimate = Vector{Union{Missing, Float64}}(missing, nrow(df))
     df.diff_se = Vector{Union{Missing, Float64}}(missing, nrow(df))
@@ -111,17 +103,27 @@ function create_diff_df(csv)
     return df
 
 end 
+end 
+
+
+
+names = ["ON","QC","BC","SK"]
+start_times = [2012,2012,2012,2012]
+end_times = [2014,2014,2014,2014]
+treatment_times = [2013, 0, 2014, 0]
+
+
+csv = create_init_csv(names, start_times, end_times, treatment_times)
 
 
 df = create_diff_df(csv)
 
-show(df, allrows=true)
 
 
 using StatFiles # For reading .dta
 df = DataFrame(load("C:/Users/Eric Bruce Jamieson/Documents/Dalhousie Work/Merit Data Sent from Matt/merit_data_changed.dta"))
-columns_to_keep = ["asian", "black", "male", "coll", "merit", "year", "state"]
-select!(df, columns_to_keep)
+#columns_to_keep = ["asian", "black", "male", "coll", "merit", "year", "state"]
+#select!(df, columns_to_keep)
 
 names = unique(df.state)
 start_times = [minimum(df[df[!, "state"] .== name, "year"]) for name in names]
@@ -133,6 +135,5 @@ treatment_times = [
 
 csv = create_init_csv(names, start_times, end_times, treatment_times)
 
-
 df = create_diff_df(csv)
-df[df[!, "treat"] .== "1", :]
+
