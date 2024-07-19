@@ -103,37 +103,5 @@ function create_diff_df(csv)
     return df
 
 end 
+
 end 
-
-
-
-names = ["ON","QC","BC","SK"]
-start_times = [2012,2012,2012,2012]
-end_times = [2014,2014,2014,2014]
-treatment_times = [2013, 0, 2014, 0]
-
-
-csv = create_init_csv(names, start_times, end_times, treatment_times)
-
-
-df = create_diff_df(csv)
-
-
-
-using StatFiles # For reading .dta
-df = DataFrame(load("C:/Users/Eric Bruce Jamieson/Documents/Dalhousie Work/Merit Data Sent from Matt/merit_data_changed.dta"))
-#columns_to_keep = ["asian", "black", "male", "coll", "merit", "year", "state"]
-#select!(df, columns_to_keep)
-
-names = unique(df.state)
-start_times = [minimum(df[df[!, "state"] .== name, "year"]) for name in names]
-end_times = [maximum(df[df[!, "state"] .== name, "year"]) for name in names]
-treatment_times = [ 
-    isempty(df[(df.merit .== 1) .&& (df.state .== name), :year]) ? 0 : minimum(df[(df.merit .== 1) .&& (df.state .== name), :year]) 
-    for name in names
-]
-
-csv = create_init_csv(names, start_times, end_times, treatment_times)
-
-df = create_diff_df(csv)
-
