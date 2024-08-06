@@ -8,7 +8,7 @@ using Dates
 
 export create_init_csv, create_diff_df, fill_diff_df, read_csv_data, combine_diff_data, create_ATT_by_gt_by_silo, compute_ATT_staggered,
         create_trends_df, run_stage_two, combine_trends_data, compute_ATT_common, compute_covariance_matrix, save_df_as_csv, run_stage_one,
-        run_stage_three
+        run_stage_three, parse_date, parse_freq
 
 ### Stage 1 Functions ###
 function create_init_csv(names=[], start_times=[], end_times=[], treatment_times=[]; covariates = false)
@@ -69,7 +69,36 @@ function create_init_csv(names=[], start_times=[], end_times=[], treatment_times
 
 end 
 
-function create_diff_df(csv; covariates = false)
+function create_diff_df(csv; covariates = false, date_format = false, freq = false, freq_multiplier = false)
+
+    # Ensure that date_format is manually selected
+    if date_format == false
+        error("Please ensure the start_times, end_times and treatment_times are formatted identically and set date_format equal to one of the following: [\"dd/mm/yyyy\", \"dd-mm-yyyy\", \"ddmmyyyy\", \"mm/dd/yyyy\", \"mm-dd-yyyy\", \"mmddyyyy\", \"mm/yyyy\", \"mm-yyyy\", \"mmyyyy\", \"yyyy\", \"ddmonyyyy\", \"yyyym00\"]")
+    end 
+
+    # Define the frequency of data
+    if freq == false
+        error("Please enter a frequency of data: 'daily', 'weekly', 'monthly', or 'yearly'")
+    elseif freq == "daily"
+        freq = Day(1)
+    elseif freq == "weekly"
+        freq = Week(1)
+    elseif freq == "monthly"
+        freq = Month(1)
+    elseif freq == "yearly"
+        freq = Year(1)
+    else
+        error("Please enter a frequency of data: 'daily', 'monthly', 'weekly' or 'yearly'")
+    end 
+
+    # Allow for frequencies like every 4 days or every 7 months etc
+    if freq_multiplier == false
+        # do nothing
+    elseif typeof(freq_multiplier) == Int && freq_multiplier !== 0
+        freq = freq*freq_multiplier
+    else
+        error("freq_multiplier must be an integer or set to false.")
+    end
 
     # Read in the init.csv and make it a dataframe
     data = readdlm(csv, ',')
@@ -77,55 +106,66 @@ function create_diff_df(csv; covariates = false)
     rows = data[2:end, :]
     df = DataFrame(rows, Symbol.(header))
 
+    # This is for flexible date handling for the parse_date function
+    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
+    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
+    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
+    "nov" => "11", "dec" => "12")
+    
+    # Converting the dates into date type objects
+    df.start_time = parse_date.(string.(df.start_time), date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+    df.end_time = parse_date.(string.(df.end_time), date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+    df.treatment_time = parse_date.(string.(df.treatment_time), date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+
     # Setup for staggered adoption
     if length(unique(df.treatment_time)) > 2
 
         # Set up the skeleton of the full empty_diff_df
         header = ["silo_name", "gvar", "treat", "diff_times", "(g,t)"]
-        column_types = [Any, Int, Int, Tuple, Tuple]
+        column_types = [Any, String, Int, Tuple, Tuple]
         diff_df = DataFrame([Symbol(header[i]) => Vector{column_types[i]}() for i in 1:length(header)])
 
 
         # Produces the appropriate year combinations that need to be calculated based on the init.csv
         for group in df[:, "silo_name"]
         
-            years = df[df[!, "silo_name"] .== group, "start_time"][1]:df[df[!, "silo_name"] .== group, "end_time"][1]
-            if df[df[!, "silo_name"] .== group, "treatment_time"][1] !== 0
-                # These are the years that matter for treated groups
-                combinations = [(y1, y2) for y1 in years, y2 in years if y1 > y2 && y1 - y2 >= 1 && df[df[!, "silo_name"] .== group, "treatment_time"][1] -1 == y2]
-                treat = 1
-            else 
+            times = df[df[!, "silo_name"] .== group, "start_time"][1]:freq:df[df[!, "silo_name"] .== group, "end_time"][1]       
+            if Date(df[df[!, "silo_name"] .== group, "treatment_time"][1]) !== Date(0)
+                # These are the years that matter for treated groups                
+                combinations = [(t1, t2) for t1 in times, t2 in times if t1 > t2 && Dates.value(t1 - t2) >= Dates.value(freq) && Dates.value(df[df[!, "silo_name"] .== group, "treatment_time"][1] - freq) == Dates.value(t2)]
+                treat = 1                
+            elseif Date(df[df[!, "silo_name"] .== group, "treatment_time"][1]) == Date(0)
                 # These are the years that matter for untreated groups
-                combinations = [(y1, y2) for y1 in years, y2 in years if y1 > y2 && y1 - y2 >= 1]
+                combinations = [(t1, t2) for t1 in times, t2 in times if t1 > t2 && Dates.value(t1 - t2) >= Dates.value(freq)]
                 treat = 0
             end 
 
             for i in 1:length(combinations)
-                push!(diff_df, [group, combinations[i][2]+1, treat, combinations[i], (combinations[i][2]+1, combinations[i][1])])
+                push!(diff_df, [group, Dates.format(combinations[i][2]+freq, date_format), treat, Dates.format.(combinations[i], date_format), Dates.format.((combinations[i][2]+freq, combinations[i][1]), date_format)])
             end 
-        
+            
         end
-
-
-
+      
         # Remove any rows for which the difference is calcuable for a treatment group but does exist for a control group
         # and vice versa
-        unpaired_years = union(setdiff(diff_df[diff_df[!, "treat"] .== 1, "diff_times"], diff_df[diff_df[!, "treat"] .== 0, "diff_times"]),setdiff(diff_df[diff_df[!, "treat"] .== 0, "diff_times"], diff_df[diff_df[!, "treat"] .== 1, "diff_times"]))
-        filter!(row -> !(row.diff_times in unpaired_years), diff_df)
+        diff_set_1 = setdiff(diff_df[diff_df[!, "treat"] .== 1, "diff_times"], diff_df[diff_df[!, "treat"] .== 0, "diff_times"])
+        diff_set_2 = setdiff(diff_df[diff_df[!, "treat"] .== 0, "diff_times"], diff_df[diff_df[!, "treat"] .== 1, "diff_times"])
+        unpaired_times = union(diff_set_1, diff_set_2)        
+        filter!(row -> !(row.diff_times in unpaired_times), diff_df)
 
     # For common treatment time
     elseif length(unique(df.treatment_time)) <= 2
 
         # Set up the skeleton of the full empty_diff_df
         header = ["silo_name", "treat", "common_treatment_time"]
-        column_types = [Any, Int, Int]
+        column_types = [Any, Int, String]
         diff_df = DataFrame([Symbol(header[i]) => Vector{column_types[i]}() for i in 1:length(header)])
-        common_treatment_time = df[df[!, "treatment_time"] .!== 0, "treatment_time"][1]
+        common_treatment_time = Dates.format(df[df[!, "treatment_time"] .!== 0, "treatment_time"][1], date_format)
 
         for silo_name in unique(df.silo_name)
-            if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== 0
+            if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== Date(0)
                 treat = 1
-            else 
+            elseif df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] == Date(0)
                 treat = 0
             end
 
@@ -158,6 +198,11 @@ function create_diff_df(csv; covariates = false)
         end
     end 
 
+    # Note the formatting of the date related information
+    diff_df.date_format = Vector{Any}(fill(date_format, nrow(diff_df)))    
+    diff_df.freq = Vector{Any}(fill(freq, nrow(diff_df)))  
+    
+
     # Define the file path
     filename = "empty_diff_df.csv"
     filepath = abspath(filename)
@@ -182,9 +227,9 @@ function create_diff_df(csv; covariates = false)
     
 end 
 
-function run_stage_one(names, start_times, end_times, treatment_times; covariates = false)
+function run_stage_one(names, start_times, end_times, treatment_times; covariates = false, date_format = false, freq = false, freq_multiplier = false)
     csv = create_init_csv(names, start_times, end_times, treatment_times)
-    return create_diff_df(csv, covariates = covariates)
+    return create_diff_df(csv, covariates = covariates, date_format = date_format, freq = freq, freq_multiplier = freq_multiplier)
 end
 
 ### Stage 2 Functions ### 
@@ -195,59 +240,34 @@ function read_csv_data(filepath_to_csv_data)
     header = data[1, :]
     rows = data[2:end, :]
     df_readin = DataFrame(rows, Symbol.(header))
-
-    # Converts the strings back into tuples for the (g,t) and diff_times columns
-    # And converts the string of covariates back into a vector of strings
-    if "diff_times" in DataFrames.names(df_readin)
-        transform!(df_readin, :diff_times => ByRow(s -> tuple(parse.(Float64, split(strip(s, ['(', ')']), ','))...)) => :diff_times)
-    end
-
-    if "(g,t)" in DataFrames.names(df_readin)
-        transform!(df_readin, :"(g,t)" => ByRow(s -> tuple(parse.(Float64, split(strip(s, ['(', ')']), ','))...)) => :"(g,t)")
-    end
+    
+    df_readin.silo_name = string.(df_readin.silo_name)
 
     if "covariates" in DataFrames.names(df_readin)
         transform!(df_readin, :covariates => ByRow(s -> [String(sub) for sub in split(replace(replace(strip(s, ['[' , ']', '"']), "\"" => ""), " " => ""), ",")]) => :covariates)
     end 
 
+    
     return df_readin
 end
 
-function fill_diff_df(silo_name, empty_diff_df, silo_data; renaming_dictionary = false)
-
-    # Select only the relevant silo from the empty_diff_df
-    empty_diff_df = empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name,:]
-
-    # Rename columns if necessary
-    if renaming_dictionary == false
-        # do nothing
-    elseif typeof(renaming_dictionary) == Dict{String, String}
-        # Check that all of the dictionary values (new column names) are in the empty_diff_df and all dictionary keys are in the local silo data column names and then rename
-        if all(value -> value in empty_diff_df.covariates[1], values(renaming_dictionary)) && all(key -> key in DataFrames.names(silo_data), keys(renaming_dictionary))
-            rename!(silo_data, renaming_dictionary)
-        elseif all(value -> value in empty_diff_df.covariates[1], values(renaming_dictionary))
-            error("Ensure that the keys in the renaming_dictionary are the covariate names in the local silo data.")
-        elseif all(key -> key in DataFrames.names(silo_data), keys(renaming_dictionary))
-            error("Ensure that the values in the renaming_dictionary are the covariate names in the empty_diff_df.")
-        else
-            error("Ensure that the keys in the renaming_dictionary are the covariate names in the local silo data and that the values of the renaming_dictionary are the corresponding covariate names in the empty_diff_df.")
-        end  
-    else
-        error("If renaming columns ensure that the typeof(renaming_dictionary) == Dict{String, String}")
-    end 
-
+function fill_diff_df(silo_name, empty_diff_df, silo_data; treatment_time = false)
+       
+    empty_diff_df_date_format = empty_diff_df.date_format[1]
     # Compute diff (gamma) estimates and standard errors in the case of common treatment times across silos
     if "common_treatment_time" in DataFrames.names(empty_diff_df)
-        
-        silo_data_copy = copy(silo_data)
+
+        if treatment_time == false
+            error("Please specify a common treatment time")
+        end
 
         # Use treatment time to construct dummy varaible indicating obs after treatment time
-        treatment_time = empty_diff_df.common_treatment_time[1]
-        silo_data_copy.year = ifelse.(silo_data_copy.year .>= treatment_time, 1, 0)
+        silo_data_copy = copy(silo_data)
+        silo_data_copy.time = ifelse.(silo_data_copy.time .>= treatment_time, 1, 0)
 
         # Construct X and Y for regression
-        X = convert(Matrix{Float64},hcat(fill(1,nrow(silo_data_copy)), silo_data_copy.year))
-        Y = convert(Vector{Float64},silo_data_copy.coll)
+        X = convert(Matrix{Float64},hcat(fill(1,nrow(silo_data_copy)), silo_data_copy.time))
+        Y = convert(Vector{Float64},silo_data_copy.outcome)
 
         # Tell the next for loop to calculate diff_estimate with covariates if cov_on == 2
         if empty_diff_df.covariates[1][1] == "none"
@@ -275,7 +295,7 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; renaming_dictionary =
 
             if cov_on == 1
                 try
-                    X = hcat(X, Matrix(silo_data_copy[:, empty_diff_df.covariates[1]]))
+                    X = hcat(X, Matrix(silo_data[:, empty_diff_df.covariates[1]]))
                 catch ex
                     if isa(ex, ArgumentError)
                         error("Please rename your covariates to align with the names used here: $(empty_diff_df.covariates[1])")
@@ -292,15 +312,15 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; renaming_dictionary =
 
         # Compute the local silo regression for each relevant year
         for diff_combo in empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name,:].diff_times
-
+            
             # Filters the silo down to the relevant year combinations and replaces the values with 1 (post) and 0 (pre)
-            silo_subset = silo_data[(silo_data[!, "year"] .== diff_combo[1] .|| silo_data[!, "year"] .== diff_combo[2]),:]
-            silo_subset.year = replace(silo_subset.year, diff_combo[1] => 1, diff_combo[2] => 0)
-
+            silo_subset = silo_data[(silo_data[!, "time"] .== diff_combo[1] .|| silo_data[!, "time"] .== diff_combo[2]),:]
+            silo_subset.time = replace(silo_subset.time, diff_combo[1] => 1, diff_combo[2] => 0)
+            
             # Define X and Y matrix for regression and add covariates if applicable
-            X = hcat(fill(1, length(silo_subset.year)), silo_subset.year)
-            Y = silo_subset.coll
-
+            X = convert(Matrix{Float64},hcat(fill(1, length(silo_subset.time)), silo_subset.time))
+            Y = convert(Vector{Float64}, silo_subset.outcome)
+            
             # Perform regression and throw gamma and var(gamma) to the empty_diff_df
             beta_hat = X\Y
             resid = Y - X*beta_hat
@@ -336,6 +356,12 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; renaming_dictionary =
             end
 
         end 
+
+        # Return date objects to strings
+        empty_diff_df.gvar = Dates.format.(empty_diff_df.gvar, empty_diff_df_date_format)
+        empty_diff_df[!, "(g,t)"] = [(Dates.format(date1, empty_diff_df_date_format), Dates.format(date2, empty_diff_df_date_format)) for (date1, date2) in empty_diff_df[!, "(g,t)"]]
+        empty_diff_df.diff_times = [(Dates.format(date1, empty_diff_df_date_format), Dates.format(date2, empty_diff_df_date_format)) for (date1, date2) in empty_diff_df.diff_times]
+
     end
 
     # Save as csv
@@ -347,31 +373,35 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; renaming_dictionary =
 
 end 
 
-function create_trends_df(silo_data, silo_name; covariates = ["none"], treatment_time = missing)
+function create_trends_df(silo_name, silo_data, freq; covariates = ["none"], treatment_time = missing)
 
-    silo_name = string(silo_name)
+    
 
     # Define column headers
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates"]
     data = [header]
-
+    
     # Push means and time to data
     if covariates == ["none"]
-        for x in minimum(silo_data[!,"year"]):maximum(silo_data[!,"year"])
-            push!(data, [silo_name, string(treatment_time), string(x), string(mean(silo_data[silo_data[!, "year"] .== x, "coll"])), "n/a", "none"])
+        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])
+            push!(data, [silo_name, string(treatment_time), string(x), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), "n/a", "none"])
         end
     else
-        for x in minimum(silo_data[!,"year"]):maximum(silo_data[!,"year"])
-            silo_subset = silo_data[silo_data[!, "year"] .== x,:]
+        
+        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])
+            
+            
+            silo_subset = silo_data[silo_data[!, "time"] .== x,:]
 
             X = Matrix(silo_subset[:, covariates])
-            Y = silo_subset.coll
+            Y = convert(Vector{Float64},silo_subset.outcome)
+           
             beta_hat = X\Y 
             Y_hat = X * beta_hat
             residuals = Y - Y_hat
 
 
-            push!(data, [silo_name, string(treatment_time), string(x), string(mean(silo_data[silo_data[!, "year"] .== x, "coll"])), string(mean(residuals)), string(covariates)])
+            push!(data, [silo_name, string(treatment_time), string(x), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), string(mean(residuals)), string(covariates)])
         end
     end
 
@@ -394,14 +424,94 @@ function create_trends_df(silo_data, silo_name; covariates = ["none"], treatment
     return filepath
 end
 
-function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data; renaming_dictionary = false)
+function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data, time_column, outcome_column, date_format_local; renaming_dictionary = false)
     
     # Given a filepath to the empty_diff_df, the name of the local silo, and 
     # a dataframe of the local silo data, runs all the necessary Stage 2 functions
-
     empty_diff_df = read_csv_data(filepath_to_empty_diff_df)
+    empty_diff_df.silo_name = string.(empty_diff_df.silo_name)
+    # First doing some pre-processing and error checking
 
-    fill_diff_df(silo_name, empty_diff_df, silo_data, renaming_dictionary = renaming_dictionary)
+    # Check that the silo_name is in the empty_diff_df
+    silo_name = string(silo_name)
+    if silo_name in unique(empty_diff_df.silo_name)
+        # do nothing
+    else
+        error("Please ensure that the silo_name exists in the silo_name column of the empty_diff_df.")
+    end 
+
+    # Check that some of the arguments are strings
+    if isa(time_column, String) && isa(outcome_column, String) && isa(date_format_local, String)
+        # do nothing
+    else 
+        error("Please ensure that time_column, outcome_column, and date_format are entered as strings.")
+    end
+
+    # Rename columns if necessary
+    if renaming_dictionary == false
+        # do nothing
+    elseif typeof(renaming_dictionary) == Dict{String, String}
+        # Check that all of the dictionary values (new column names) are in the empty_diff_df and all dictionary keys are in the local silo data column names and then rename
+        if all(value -> value in empty_diff_df.covariates[1], values(renaming_dictionary)) && all(key -> key in DataFrames.names(silo_data), keys(renaming_dictionary))
+            rename!(silo_data, renaming_dictionary)
+        elseif all(value -> value in empty_diff_df.covariates[1], values(renaming_dictionary))
+            error("Ensure that the keys in the renaming_dictionary are the covariate names in the local silo data.")
+        elseif all(key -> key in DataFrames.names(silo_data), keys(renaming_dictionary))
+            error("Ensure that the values in the renaming_dictionary are the covariate names in the empty_diff_df.")
+        else
+            error("Ensure that the keys in the renaming_dictionary are the covariate names in the local silo data and that the values of the renaming_dictionary are the corresponding covariate names in the empty_diff_df.")
+        end  
+    else
+        error("If renaming columns ensure that the typeof(renaming_dictionary) == Dict{String, String}")
+    end 
+
+    # Select only the relevant silo from the empty_diff_df also save the date format
+    empty_diff_df = empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name,:]
+    empty_diff_df_date_format = empty_diff_df.date_format[1]
+
+    # Rename the time and treatment columns appropriately
+    rename!(silo_data, time_column => "time")
+    rename!(silo_data, outcome_column => "outcome")
+
+    
+
+    # This is for flexible date handling for the parse_date function
+    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
+    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
+    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
+    "nov" => "11", "dec" => "12")
+
+    # Convert some string date information into Date type objects
+    if "diff_times" in DataFrames.names(empty_diff_df)        
+        
+        empty_diff_df.diff_times = split.(replace.(replace.(replace.(replace.(empty_diff_df.diff_times, "\"" => ""), "(" => ""), ")"=> ""), " " => ""), ",")
+        transform!(empty_diff_df, :diff_times => ByRow(time -> (Date(time[1], empty_diff_df_date_format), Date(time[2], empty_diff_df_date_format))) => :diff_times)
+
+        empty_diff_df.gvar = Date.(string.(empty_diff_df.gvar), empty_diff_df_date_format)
+
+        empty_diff_df[!, "(g,t)"] = split.(replace.(replace.(replace.(replace.(empty_diff_df[!, "(g,t)"], "\"" => ""), "(" => ""), ")"=> ""), " " => ""), ",")
+        transform!(empty_diff_df, :"(g,t)" => ByRow(time -> (Date(time[1], empty_diff_df_date_format), Date(time[2], empty_diff_df_date_format))) => :"(g,t)")
+
+        treatment_time = false
+    end 
+
+    if "common_treatment_time" in DataFrames.names(empty_diff_df)
+        treatment_time = parse_date(string(empty_diff_df.common_treatment_time[1]), empty_diff_df.date_format[1], possible_formats_UNDID, month_map_UNDID)
+    end
+    
+    # Convert the time column to a date object
+    if date_format_local == "yyyy" && typeof(silo_data.time[1]) <: AbstractFloat
+        silo_data.time = Int.(silo_data.time)
+    elseif date_format_local == "yyyy" && typeof(silo_data.time[1]) <: Integer
+        # do nothing
+    elseif !(typeof(silo_data.time[1]) <: String)
+        error("Ensure your time column contains string values.")
+    end
+
+    silo_data.time = parse_date.(lowercase.(string.(silo_data.time)), date_format_local, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+    
+
+    fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time)
 
     covariates = empty_diff_df[!, "covariates"][1]
 
@@ -416,7 +526,9 @@ function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data; renaming
         treatment_time = "control"
     end 
     
-    create_trends_df(silo_data, silo_name; covariates = covariates, treatment_time = treatment_time)
+    freq = parse_freq(string(empty_diff_df.freq[1]))
+
+    create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time)
 
 end 
 
@@ -464,8 +576,23 @@ function combine_trends_data(dir_path; save_csv = false)
 
 end 
 
-function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false)
+function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false, running_from_stage_3_wrapper = false)
     
+    # Run this only if running the function directly and not from the wrapper
+    if running_from_stage_3_wrapper == false
+        combined_diff_data_date_format = string(combined_diff_data.date_format[1])
+
+        # Convert some string date information into Date type objects      
+        combined_diff_data.diff_times = split.(replace.(replace.(replace.(replace.(combined_diff_data.diff_times, "\"" => ""), "(" => ""), ")"=> ""), " " => ""), ",")
+        transform!(combined_diff_data, :diff_times => ByRow(time -> (Date(time[1], combined_diff_data_date_format), Date(time[2], combined_diff_data_date_format))) => :diff_times)
+
+        combined_diff_data.gvar = Date.(string.(combined_diff_data.gvar), combined_diff_data_date_format)
+
+        combined_diff_data[!, "(g,t)"] = split.(replace.(replace.(replace.(replace.(combined_diff_data[!, "(g,t)"], "\"" => ""), "(" => ""), ")"=> ""), " " => ""), ",")
+        transform!(combined_diff_data, :"(g,t)" => ByRow(time -> (Date(time[1], combined_diff_data_date_format), Date(time[2], combined_diff_data_date_format))) => :"(g,t)")
+    end 
+
+
     # Creating some preallocation vectors
     treated_silo = []
     control_silo = []
@@ -697,21 +824,38 @@ end
 function run_stage_three(dir_path; save_all_csvs = false)
 
     combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs)
+    combined_diff_data_date_format = string(combined_diff_data.date_format[1])
+
+    # Convert some string date information into Date type objects
+    if "diff_times" in DataFrames.names(combined_diff_data)        
+        
+        combined_diff_data.diff_times = split.(replace.(replace.(replace.(replace.(combined_diff_data.diff_times, "\"" => ""), "(" => ""), ")"=> ""), " " => ""), ",")
+        transform!(combined_diff_data, :diff_times => ByRow(time -> (Date(time[1], combined_diff_data_date_format), Date(time[2], combined_diff_data_date_format))) => :diff_times)
+
+        combined_diff_data.gvar = Date.(string.(combined_diff_data.gvar), combined_diff_data_date_format)
+
+        combined_diff_data[!, "(g,t)"] = split.(replace.(replace.(replace.(replace.(combined_diff_data[!, "(g,t)"], "\"" => ""), "(" => ""), ")"=> ""), " " => ""), ",")
+        transform!(combined_diff_data, :"(g,t)" => ByRow(time -> (Date(time[1], combined_diff_data_date_format), Date(time[2], combined_diff_data_date_format))) => :"(g,t)")
+    end 
 
     combined_trends_data = combine_trends_data(dir_path, save_csv = save_all_csvs)
 
     if "common_treatment_time" in DataFrames.names(combined_diff_data)
         results = compute_ATT_common(combined_diff_data)
+
+        return combined_trends_data, combined_diff_data, results
     else
-        ATT_by_gt_by_silo = create_ATT_by_gt_by_silo(combined_diff_data, save_csv = save_all_csvs)
+        ATT_by_gt_by_silo = create_ATT_by_gt_by_silo(combined_diff_data, save_csv = save_all_csvs, running_from_stage_3_wrapper = true)
         results = compute_ATT_staggered(ATT_by_gt_by_silo)
+
+        return combined_trends_data, combined_diff_data, ATT_by_gt_by_silo, results
     end 
 
-    return results
+    
 
 end
 
-### Misc Functions ###
+### Misc Functions and Variables ###
 function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates = false)
     X = convert(Matrix{Float64}, X)
     cov_beta_hat = zeros(size(X, 2), size(X, 2))
@@ -757,5 +901,57 @@ function save_df_as_csv(filename, df)
     println(formatted_path)
 end 
 
+
+function parse_date(date, date_format, possible_formats = false, month_map = false)
+    
+    if possible_formats == false || month_map == false
+        error("Please pass a dictionary such as Dict(\"jan\" => \"01\", \"feb\" => \"02\", \"mar\" => \"03\", \"apr\" => \"04\", \"may\" => \"05\", \"jun\" => \"06\", \"jul\" => \"07\", \"aug\" => \"08\", \"sep\" => \"09\", \"oct\" => \"10\", \"nov\" => \"11\", \"dec\" => \"12\") as well as the possible formats [\"yyyy/mm/dd\", \"yyyy-mm-dd\", \"yyyymmdd\", \"yyyy/dd/mm\", \"yyyy-dd-mm\", \"yyyyddmm\", \"dd/mm/yyyy\", \"dd-mm-yyyy\", \"ddmmyyyy\", \"mm/dd/yyyy\", \"mm-dd-yyyy\", \"mmddyyyy\",
+        \"mm/yyyy\", \"mm-yyyy\", \"mmyyyy\", \"yyyy\", \"ddmonyyyy\", \"yyyym00\"]")
+    end
+    
+    if date_format == "ddmonyyyy"
+        date = lowercase(date)
+        day = date[1:2]
+        month_str = date[3:5]
+        year = date[6:end]
+
+        month = month_map_UNDID[month_str]
+
+        output = Date("$day/$month/$year", "dd/mm/yyyy")
+
+    elseif date_format == "yyyym00"
+        date = lowercase(date)
+        info = split(date, "m")
+        
+        output = Dates.format(Date("$(info[2])/$(info[1])", "mm/yyyy"), "mm/yyyy")
+
+    elseif date_format in possible_formats
+        
+        output = Date(date, date_format)
+        
+    else
+        error("Please specify a date_format listed here: $possible_formats_UNDID. Format 'ddmonyyyy' should look like '25dec2020' and format yyyym00 should look like '2020m12'.")
+    end 
+
+    return output 
+end
+
+function parse_freq(period_str::String)
+    parts = split(period_str)
+    value = parse(Int, parts[1])
+    period_type = parts[2]
+    
+    if period_type in ["week", "weeks"]
+        return Week(value)
+    elseif period_type in ["day", "days"]
+        return Day(value)
+    elseif period_type in ["month", "months"]
+        return Month(value)
+    elseif period_type in ["year", "years"]
+        return Year(value)
+    else
+        throw(ArgumentError("Unsupported period type: $period_type, try day(s), week(s), month(s), or year(s)."))
+    end
+end
 
 end 
