@@ -147,7 +147,7 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
         header = ["silo_name", "treat", "common_treatment_time"]
         column_types = [Any, Int, String]
         diff_df = DataFrame([Symbol(header[i]) => Vector{column_types[i]}() for i in 1:length(header)])
-        common_treatment_time = Dates.format(df[df[!, "treatment_time"] .!== 0, "treatment_time"][1], date_format)
+        common_treatment_time = parse_date_to_string(df[df[!, "treatment_time"] .!== 0, "treatment_time"][1], date_format)
 
         for silo_name in unique(df.silo_name)
             if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== Date(0)
@@ -200,6 +200,13 @@ end
 
 ### Stage 2 Functions ### 
 function read_csv_data(filepath_to_csv_data)
+
+    # This is for flexible date handling for the parse_string_to_date function
+    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
+    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
+    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
+    "nov" => "11", "dec" => "12")
+
     # Reads in the empty_diff_df.csv
     data = readdlm(filepath_to_csv_data, ',')
     header = data[1, :]    
@@ -213,19 +220,15 @@ function read_csv_data(filepath_to_csv_data)
         df_readin_date_format = df_readin.date_format[1]
 
         df_readin.diff_times = split.(df_readin.diff_times, ";")        
-        transform!(df_readin, :diff_times => ByRow(time -> (Date(time[1], df_readin_date_format), Date(time[2], df_readin_date_format))) => :diff_times)
+        transform!(df_readin, :diff_times => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :diff_times)
 
-        df_readin.gvar = Date.(string.(df_readin.gvar), df_readin_date_format)
+        df_readin.gvar = parse_string_to_date.(string.(df_readin.gvar), df_readin_date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
 
         df_readin[!, "(g;t)"] = split.(df_readin[!, "(g;t)"], ";")
-        transform!(df_readin, :"(g;t)" => ByRow(time -> (Date(time[1], df_readin_date_format), Date(time[2], df_readin_date_format))) => :"(g;t)")
+        transform!(df_readin, :"(g;t)" => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :"(g;t)")
     end 
     if "time" in DataFrames.names(df_readin)
-        # This is for flexible date handling for the parse_string_to_date function
-        possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
-        "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
-        month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
-        "nov" => "11", "dec" => "12")
+        
         df_readin.time = parse_string_to_date.(string.(df_readin.time), df_readin.date_format[1], Ref(possible_formats_UNDID), Ref(month_map_UNDID))
 
         # Now based on Date object we can created a column "period" that will translate each date to an associated integer period
@@ -234,7 +237,7 @@ function read_csv_data(filepath_to_csv_data)
         df_readin.period = [date_dict[date] for date in df_readin.time]
 
         # Likewise we define the treatment_time as a period as well
-        df_readin[df_readin.treatment_time .!= "control", "treatment_time"] = Date.(string.(df_readin[df_readin.treatment_time .!= "control",:].treatment_time), "yyyy")
+        df_readin[df_readin.treatment_time .!= "control", "treatment_time"] = parse_string_to_date.(string.(df_readin[df_readin.treatment_time .!= "control",:].treatment_time), df_readin.date_format[1], Ref(possible_formats_UNDID), Ref(month_map_UNDID))
         df_readin.treatment_period = [x isa Date ? date_dict[x] : missing for x in df_readin.treatment_time]
     end 
     return df_readin
@@ -312,7 +315,7 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; treatment_time = fals
             # Perform regression and throw gamma and var(gamma) to the empty_diff_df
             beta_hat = X\Y
             resid = Y - X*beta_hat
-            sigma_sq = sum(resid.^2) / (length(resid) - length(beta_hat))
+            sigma_sq = sum(resid.^2) / (length(resid) - length(beta_hat))            
             cov_beta_hat = compute_covariance_matrix(X, sigma_sq, diff_times = diff_combo)
             
             empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& (in.(diff_combo[2], empty_diff_df[!, "diff_times"])), "diff_estimate"] .= beta_hat[2]
@@ -346,9 +349,9 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; treatment_time = fals
         end 
 
         # Return date objects to strings
-        empty_diff_df.gvar = Dates.format.(empty_diff_df.gvar, empty_diff_df_date_format)
-        empty_diff_df[!, "(g;t)"] = [join((Dates.format(date1, empty_diff_df_date_format), Dates.format(date2, empty_diff_df_date_format)), ";") for (date1, date2) in empty_diff_df[!, "(g;t)"]]
-        empty_diff_df.diff_times = [join((Dates.format(date1, empty_diff_df_date_format), Dates.format(date2, empty_diff_df_date_format)), ";") for (date1, date2) in empty_diff_df.diff_times]
+        empty_diff_df.gvar = parse_date_to_string.(empty_diff_df.gvar, empty_diff_df_date_format)
+        empty_diff_df[!, "(g;t)"] = [join((parse_date_to_string(date1, empty_diff_df_date_format), parse_date_to_string(date2, empty_diff_df_date_format)), ";") for (date1, date2) in empty_diff_df[!, "(g;t)"]]
+        empty_diff_df.diff_times = [join((parse_date_to_string(date1, empty_diff_df_date_format), parse_date_to_string(date2, empty_diff_df_date_format)), ";") for (date1, date2) in empty_diff_df.diff_times]
 
     end  
 
@@ -369,7 +372,7 @@ function create_trends_df(silo_name, silo_data, freq; covariates = ["none"], tre
     # Push means and time to data
     if covariates == ["none"]
         for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])
-            push!(trends_df, [silo_name, string(treatment_time), Dates.format(x, date_format), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), "n/a", ["none"], string(date_format), string(freq)])
+            push!(trends_df, [silo_name, string(treatment_time), parse_date_to_string(x, date_format), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), "n/a", ["none"], string(date_format), string(freq)])
         end
     else        
         for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])            
@@ -383,7 +386,7 @@ function create_trends_df(silo_name, silo_data, freq; covariates = ["none"], tre
             Y_hat = X * beta_hat
             residuals = Y - Y_hat
 
-            push!(trends_df, [silo_name, string(treatment_time), Dates.format(x, date_format), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), string(mean(residuals)), covariates, string(date_format), string(freq)])
+            push!(trends_df, [silo_name, string(treatment_time), parse_date_to_string(x, date_format), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), string(mean(residuals)), covariates, string(date_format), string(freq)])
         end
     end
     
@@ -471,7 +474,7 @@ function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data, time_col
     end
 
     silo_data.time = parse_string_to_date.(lowercase.(string.(silo_data.time)), date_format_local, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
-
+    
     fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time)    
 
     treated_or_not = empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "treat"][1]
@@ -856,16 +859,16 @@ function parse_string_to_date(date, date_format, possible_formats = false, month
         day = date[1:2]
         month_str = date[3:5]
         year = date[6:end]
-        month = month_map_UNDID[month_str]
+        month = month_map[month_str]
         output = Date("$day/$month/$year", "dd/mm/yyyy")
     elseif date_format == "yyyym00"
         date = lowercase(date)
         info = split(date, "m")        
-        output = Dates.format(Date("$(info[2])/$(info[1])", "mm/yyyy"), "mm/yyyy")
+        output = Date("$(info[2])/$(info[1])", "mm/yyyy")
     elseif date_format in possible_formats        
         output = Date(date, date_format)        
     else
-        error("Please specify a date_format listed here: $possible_formats_UNDID. Format 'ddmonyyyy' should look like '25dec2020' and format yyyym00 should look like '2020m12'.")
+        error("Please specify a date_format listed here: $possible_formats. Format 'ddmonyyyy' should look like '25dec2020' and format yyyym00 should look like '2020m12'.")
     end 
 
     return output 
@@ -873,27 +876,24 @@ end
 
 function parse_date_to_string(date, date_format)
     
-    # This function is basically a wrapper for Dates.format()
+    # This function is basically a wrapper for parse_date_to_string()
     # except this adds a bit more functionality so that it can 
     # take date strings in Stata formats (e.g. 25dec2020 or 2020m12) and return those as strings
-
     if date_format == "ddmonyyyy"
         month_dict = Dict("01" => "jan", "02" => "feb", "03" => "mar", "04" => "apr", "05" => "may", 
         "06" => "jun", "07" => "jul", "08" => "aug", "09" => "sep", "10" => "oct", 
         "11" => "nov", "12" => "dec")
-        vectorized_date_object = split(string(date_object), "-")
-        output = "$(vectorized_date_object[3])$(month_dict[vectorized_date_object[2]])$(vectorized_date_object[1])"        
+        vectorized_date_object = split(string(date), "-")
+        return "$(vectorized_date_object[3])$(month_dict[vectorized_date_object[2]])$(vectorized_date_object[1])"        
     elseif date_format == "yyyym00"
         month_dict = Dict("01" => "m1", "02" => "m2", "03" => "m3", "04" => "m4", "05" => "m5", 
         "06" => "m6", "07" => "m7", "08" => "m8", "09" => "m9", "10" => "m10", 
         "11" => "m11", "12" => "m12")
-        vectorized_date_object = split(string(date_object), "-")
-        output = "$(vectorized_date_object[1])$(month_dict[vectorized_date_object[2]])"
+        vectorized_date_object = split(string(date), "-")
+        return "$(vectorized_date_object[1])$(month_dict[vectorized_date_object[2]])"
     else
-        output = Dates.format(date, date_format)
+        return Dates.format(date, date_format)
     end 
-
-    return output
 end
 
 function parse_freq(period_str::String)
