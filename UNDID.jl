@@ -212,7 +212,9 @@ function read_csv_data(filepath_to_csv_data)
     header = data[1, :]    
     rows = data[2:end, :]
     df_readin = DataFrame(rows, Symbol.(header))    
-    df_readin.silo_name = string.(df_readin.silo_name)
+    if "silo_name" in DataFrames.names(df_readin)
+        df_readin.silo_name = string.(df_readin.silo_name)
+    end
     if "covariates" in DataFrames.names(df_readin)
         transform!(df_readin, :covariates => ByRow(s -> [String(sub) for sub in split(replace(replace(strip(s, ['[' , ']', '"']), "\"" => ""), " " => ""), ";")]) => :covariates)
     end
@@ -222,8 +224,9 @@ function read_csv_data(filepath_to_csv_data)
         df_readin.diff_times = split.(df_readin.diff_times, ";")        
         transform!(df_readin, :diff_times => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :diff_times)
 
-        df_readin.gvar = parse_string_to_date.(string.(df_readin.gvar), df_readin_date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
-
+        if "gvar" in DataFrames.names(df_readin)
+            df_readin.gvar = parse_string_to_date.(string.(df_readin.gvar), df_readin_date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+        end 
         df_readin[!, "(g;t)"] = split.(df_readin[!, "(g;t)"], ";")
         transform!(df_readin, :"(g;t)" => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :"(g;t)")
     end 
@@ -509,7 +512,19 @@ function combine_diff_data(dir_path; save_csv = false)
 
     # Save as csv if save_csv == true
     if save_csv == true
-        save_as_csv("combined_diff_data.csv", data, "df")        
+        copy_df = copy(data)
+        copy_df.covariates = fill(join(copy_df.covariates[1], ";"), nrow(copy_df))           
+        # Return date objects to strings
+        copy_df_date_format = data.date_format[1]
+
+        if "diff_times" in DataFrames.names(copy_df)
+            copy_df[!, "(g;t)"] = [join((parse_date_to_string(date1, copy_df_date_format), parse_date_to_string(date2, copy_df_date_format)), ";") for (date1, date2) in copy_df[!, "(g;t)"]]
+            copy_df.diff_times = [join((parse_date_to_string(date1, copy_df_date_format), parse_date_to_string(date2, copy_df_date_format)), ";") for (date1, date2) in copy_df.diff_times]
+            copy_df.gvar = parse_date_to_string.(copy_df.gvar, copy_df_date_format)
+        end 
+
+
+        save_as_csv("combined_diff_data.csv", copy_df, "df")        
     end
 
     # Returns df
@@ -530,7 +545,13 @@ function combine_trends_data(dir_path; save_csv = false)
 
     # Save as csv if save_csv == true
     if save_csv == true
-        save_as_csv("combined_trends_data.csv", data, "df")        
+        copy_df = copy(data)
+        copy_df.covariates = fill(join(copy_df.covariates[1], ";"), nrow(copy_df))           
+        # Return date objects to strings
+        copy_df_date_format = data.date_format[1]
+        copy_df.time = parse_date_to_string.(copy_df.time, copy_df_date_format)        
+        copy_df[copy_df.treatment_time .!= "control", "treatment_time"] = parse_date_to_string.(copy_df[copy_df.treatment_time .!= "control",:].treatment_time, copy_df_date_format)
+        save_as_csv("combined_trends_data.csv", copy_df, "df")        
     end
 
     # Returns df
@@ -606,7 +627,14 @@ function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false, running_
 
     # If save_as_csv == true then save as a csv as well
     if save_csv == true
-        save_as_csv("ATT_by_gt_by_silo.csv", ATT_by_gt_by_silo_df, "df")        
+        copy_df = copy(ATT_by_gt_by_silo_df)
+        copy_df.covariates = fill(join(copy_df.covariates[1], ";"), nrow(copy_df))           
+        # Return date objects to strings
+        att_by_gt_by_silo_date_format = combined_diff_data.date_format[1]
+        copy_df[!, "(g;t)"] = [join((parse_date_to_string(date1, att_by_gt_by_silo_date_format), parse_date_to_string(date2, att_by_gt_by_silo_date_format)), ";") for (date1, date2) in copy_df[!, "(g;t)"]]
+        copy_df.diff_times = [join((parse_date_to_string(date1, att_by_gt_by_silo_date_format), parse_date_to_string(date2, att_by_gt_by_silo_date_format)), ";") for (date1, date2) in copy_df.diff_times]
+        copy_df.date_format = fill(att_by_gt_by_silo_date_format, nrow(copy_df))
+        save_as_csv("ATT_by_gt_by_silo.csv", copy_df, "df")        
     end
 
 
@@ -768,7 +796,8 @@ function compute_ATT_common(combined_diff_data)
     return undid_results    
 end
 
-function run_stage_three(dir_path; save_all_csvs = false)
+function run_stage_three(dir_path; save_all_csvs::Bool = false)
+
 
     combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs)    
     combined_trends_data = combine_trends_data(dir_path, save_csv = save_all_csvs)
@@ -781,7 +810,7 @@ function run_stage_three(dir_path; save_all_csvs = false)
         ATT_by_gt_by_silo = create_ATT_by_gt_by_silo(combined_diff_data, save_csv = save_all_csvs, running_from_stage_3_wrapper = true)
         results = compute_ATT_staggered(ATT_by_gt_by_silo)
 
-        return combined_trends_data, combined_diff_data, ATT_by_gt_by_silo, results
+        return combined_diff_data, combined_trends_data, ATT_by_gt_by_silo, results
     end 
 
     
