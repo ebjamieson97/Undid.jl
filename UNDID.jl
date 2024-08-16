@@ -6,8 +6,8 @@ using DataFrames
 using DelimitedFiles
 using Dates
 
-export create_init_csv, create_diff_df, fill_diff_df, read_csv_data, combine_diff_data, create_ATT_by_gt_by_silo, compute_ATT_staggered,
-        create_trends_df, run_stage_two, combine_trends_data, compute_ATT_common, compute_covariance_matrix, save_as_csv, run_stage_one,
+export create_init_csv, create_diff_df, fill_diff_df, read_csv_data, combine_diff_data, create_ATT_by_gt_by_silo, compute_ATT_staggered_by_silo,
+        create_trends_df, run_stage_two, combine_trends_data, compute_ATT_common_by_silo, compute_covariance_matrix, save_as_csv, run_stage_one,
         run_stage_three, parse_string_to_date, parse_freq, parse_date_to_string
 
 ### Stage 1 Functions ###
@@ -184,7 +184,27 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
 
     # Note the formatting of the date related information
     diff_df.date_format = Vector{Any}(fill(date_format, nrow(diff_df)))    
-    diff_df.freq = Vector{Any}(fill(freq, nrow(diff_df)))      
+    diff_df.freq = Vector{Any}(fill(freq, nrow(diff_df))) 
+    
+    # Finally, this if loop adds the necessary rows needed to carry out the RI inference later
+    if "gvar" in DataFrames.names(diff_df) && length(unique(diff_df.gvar)) == 2
+        diff_df.RI_inference = fill(0, nrow(diff_df))
+        diff_df.treat = convert(Vector{Any}, diff_df.treat)
+        for silo in unique(diff_df[diff_df.treat .== 1, "silo_name"])
+            diff_times_to_add = setdiff(unique(diff_df.diff_times),diff_df[diff_df.silo_name .== silo ,:].diff_times)
+            for time in diff_times_to_add
+                filtered_df = unique(filter(row -> row.diff_times == time, diff_df)[:, Not([:silo_name, :RI_inference, :treat])])
+                gvar = filtered_df.gvar[1]
+                filtered_df = filtered_df[:, Not(:gvar)]
+                insertcols!(filtered_df, 1, :silo_name => [silo])
+                insertcols!(filtered_df, 2, :gvar => [gvar])
+                insertcols!(filtered_df, 3, :treat => ["RI"])
+                filtered_df[!, :RI_inference] = [1]
+                append!(diff_df, filtered_df)
+            end 
+
+        end 
+    end
 
     # Save as empty_diff_df.csv
     save_as_csv("empty_diff_df.csv", diff_df, "df")
@@ -559,7 +579,7 @@ function combine_trends_data(dir_path; save_csv = false)
 
 end 
 
-function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false, running_from_stage_3_wrapper = false)
+function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false)
     
     # Creating some preallocation vectors
     treated_silo = []
@@ -642,7 +662,7 @@ function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false, running_
 
 end
 
-function compute_ATT_staggered(ATT_by_gt_by_silo)
+function compute_ATT_staggered_by_silo(ATT_by_gt_by_silo)
 
     # Preallocation vectors
     ATTs_bysilo = []
@@ -688,7 +708,7 @@ function compute_ATT_staggered(ATT_by_gt_by_silo)
     return ATTs_bysilo_df
 end 
 
-function compute_ATT_common(combined_diff_data)
+function compute_ATT_common_by_silo(combined_diff_data)
 
     
     ATTs_bysilos = []
@@ -796,26 +816,353 @@ function compute_ATT_common(combined_diff_data)
     return undid_results    
 end
 
-function run_stage_three(dir_path; save_all_csvs::Bool = false)
+function run_stage_three(dir_path; agg::String = "silo", covariates::Bool = false, save_all_csvs::Bool = false)
 
-
-    combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs)    
+    combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs) 
     combined_trends_data = combine_trends_data(dir_path, save_csv = save_all_csvs)
 
-    if "common_treatment_time" in DataFrames.names(combined_diff_data)
-        results = compute_ATT_common(combined_diff_data)
 
-        return combined_trends_data, combined_diff_data, results
-    else
-        ATT_by_gt_by_silo = create_ATT_by_gt_by_silo(combined_diff_data, save_csv = save_all_csvs, running_from_stage_3_wrapper = true)
-        results = compute_ATT_staggered(ATT_by_gt_by_silo)
-
-        return combined_diff_data, combined_trends_data, ATT_by_gt_by_silo, results
+    # Generate all the necessary matrices to do the randomization inference
+    if "RI_inference" in DataFrames.names(combined_diff_data)
+        RI_inference_data = combined_diff_data[combined_diff_data.RI_inference .== 1,:]   
+        diff_matrix_no_RI = combined_diff_data[combined_diff_data.RI_inference .== 0,:]
     end 
 
     
+    combined_diff_data.treat = convert(Vector{Float64}, combined_diff_data.treat)
+    if covariates == false
+        combined_diff_data.y = convert(Vector{Float64}, combined_diff_data.diff_estimate)
+    elseif covariates == true
+        try
+            combined_diff_data.y = convert(Vector{Float64}, combined_diff_data.diff_estimate_covariates)
+        catch ex
+            if isa(ex, MethodError)
+                error("No covariates. Set covariates = false.")
+            else
+                rethrow(ex)
+            end 
+        end 
+    end
 
+
+    if "common_treatment_time" in DataFrames.names(combined_diff_data)
+        println("Calcualting aggregate ATT with covariates set to $covariates.")
+        ATT = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
+        treatment_time = combined_diff_data.common_treatment_time[1]
+        results = DataFrame(treatment_time = treatment_time, ATT = ATT)
+        # Compute jackknife SE if there are at least 2 controls and 2 treatment silos
+        if sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) >= 2
+            jackknives_common = []
+            for silo in combined_diff_data.silo_name
+                subset = combined_diff_data[combined_diff_data.silo_name .!= silo,:]
+                push!(jackknives_common, (hcat(fill(1.0, length(subset.treat)), subset.treat) \ subset.y)[2])
+            end 
+            jackknife_SE = sqrt(sum((jackknives_common .- ATT).^2) / length(jackknives_common))
+            results.jackknife_SE = [jackknife_SE]
+
+        elseif sum(combined_diff_data.treat .== 1) == 1 && sum(combined_diff_data.treat .== 0) == 1
+            if covariates == false 
+                SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var)))
+            elseif covariates == true 
+                SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var_covariates)))
+            end 
+            results.SE = [SE]
+         
+        # Do randomization inference in two cases: 1 treated and >1 controls, >1 treated and 1 control 
+        elseif (sum(combined_diff_data.treat .== 0) == 1 && sum(combined_diff_data.treat .== 1) >= 2) || (sum(combined_diff_data.treat .== 0) >= 2 && sum(combined_diff_data.treat .== 1) == 1)
+            if sum(combined_diff_data.treat .== 0) == 1
+                unique_value = 0
+                non_unique = 1
+            elseif sum(combined_diff_data.treat .== 1) == 1
+                unique_value = 1
+                non_unique = 0
+            end
+            beta_r = []
+            for i in 1:nrow(combined_diff_data)
+                combined_diff_data.treat .= non_unique
+                combined_diff_data.treat[i] = unique_value
+            
+                beta = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
+                push!(beta_r, abs(beta))
+            end
+        
+            p_value_RI = 0
+            for beta in beta_r 
+                p_value_RI += Int(beta >= abs(ATT))
+            end 
+            p_value_RI = p_value_RI/ length(beta_r)
+            results.p_value_RI = [p_value_RI]
+        end
+
+                
+        return results
+    else
+        if !(agg == "silo" || agg == "g" || agg == "gt")
+            error("Please specify a weighting scheme for ATT: \"silo\", \"gt\", or \"g\".")
+        end
+        println("Calcualting aggregate ATT with covariates set to $covariates and aggregation method set to $agg.")
+
+        if agg == "silo"            
+            treated_silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"])
+            silos_att = []
+            for silo in treated_silos
+                treated = combined_diff_data[combined_diff_data.silo_name .== silo,:]
+                control = combined_diff_data[combined_diff_data.treat .== 0,:]            
+                diff_times_treated = treated.diff_times
+                control = filter(row -> row.diff_times in diff_times_treated, control)            
+                local_df = vcat(control, treated)
+                beta_hat = hcat(fill(1.0, length(local_df.treat)), local_df.treat) \ local_df.y
+                push!(silos_att, beta_hat[2])                
+            end
+            jackknives_silo = []
+            for i in 1:length(silos_att)
+                # Exclude the i-th element and calculate the mean of the remaining elements
+                mean_excluding_i = mean([silos_att[1:i-1]..., silos_att[i+1:end]...])
+                # Push the result to the jackknives vector
+                push!(jackknives_silo, mean_excluding_i)
+            end
+            ATT_silo = mean(silos_att)
+            jackknife_SE = sqrt(sum((jackknives_silo .-ATT_silo).^2) / length(jackknives_silo))
+            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = silos_att, agg_ATT = vcat([ATT_silo], fill(missing, length(silos_att) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(silos_att) - 1)))          
+        elseif agg == "gt" || agg == "g"            
+            ATT_vec = []
+            gt_vec = []
+            for gt in unique(combined_diff_data[!, "(g;t)"])                
+                subset = combined_diff_data[(in.(gt[1], combined_diff_data[!, "(g;t)"])) .&& (in.(gt[2], combined_diff_data[!, "(g;t)"])),:]
+                beta_hat = hcat(fill(1.0, length(subset.treat)),subset.treat) \ subset.y
+                push!(ATT_vec, beta_hat[2])                
+                push!(gt_vec, gt)
+            end
+            if agg == "gt"
+                # Compute the jackknife means
+                jackknives_gt = []
+                for i in 1:length(ATT_vec)
+                    # Exclude the i-th element and calculate the mean of the remaining elements
+                    mean_excluding_i = mean([ATT_vec[1:i-1]..., ATT_vec[i+1:end]...])
+                    # Push the result to the jackknives vector
+                    push!(jackknives_gt, mean_excluding_i)
+                end
+                ATT_gt = mean(ATT_vec)
+                jackknife_SE = sqrt(sum((jackknives_gt .-ATT_gt).^2) / length(jackknives_gt))
+                results = DataFrame(gt = gt_vec, ATT_gt = ATT_vec, agg_ATT = vcat([ATT_gt], fill(missing, length(ATT_vec) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_vec) - 1)))
+                results.gt = [join((parse_date_to_string(date1, combined_diff_data.date_format[1]), parse_date_to_string(date2, combined_diff_data.date_format[1])), ";") for (date1, date2) in results[!, "gt"]]
+            end 
+            if agg == "g"                
+                gt_g = unique(combined_diff_data.gvar)
+                counters = Dict{Date, Int}()
+                for g in gt_g
+                    # Initialize g counter if it doesn't exist yet
+                    if !haskey(counters, g)
+                        counters[g] = 0
+                    end
+                    # Add counts of g
+                    for gt in gt_vec
+                        if g == gt[1]
+                            counters[g] += 1
+                        end 
+                    end
+                end                 
+                ATT_gt_df = DataFrame(ATT_gt = ATT_vec, gt = gt_vec)
+                g_vec = []
+                for g in ATT_gt_df.gt
+                    push!(g_vec, g[1])
+                end
+                ATT_gt_df.g = g_vec
+                g_weight = []
+                for g in ATT_gt_df.g
+                    push!(g_weight, 1/counters[g])
+                end
+                ATT_gt_df.g_weight = g_weight
+                ATT_gt_df.weighted_ATT = ATT_gt_df.g_weight .* ATT_gt_df.ATT_gt
+                ATT_by_gvar_weighted = []
+                for g in unique(ATT_gt_df.g)
+                    push!(ATT_by_gvar_weighted, sum(ATT_gt_df[ATT_gt_df.g .== g,"weighted_ATT"]))
+                end
+                # Compute the jackknife means
+                jackknives_g = []
+                for i in 1:length(ATT_by_gvar_weighted)
+                    # Exclude the i-th element and calculate the mean of the remaining elements
+                    mean_excluding_i = mean([ATT_by_gvar_weighted[1:i-1]..., ATT_by_gvar_weighted[i+1:end]...])
+                    # Push the result to the jackknives vector
+                    push!(jackknives_g, mean_excluding_i)
+                end
+                ATT_g = mean(ATT_by_gvar_weighted)
+                jackknife_SE = sqrt(sum((jackknives_g .-ATT_g).^2) / length(jackknives_g))
+                results = DataFrame(g = parse_date_to_string.(unique(ATT_gt_df.g), combined_diff_data.date_format[1]), ATT_g = ATT_by_gvar_weighted, agg_ATT = vcat([ATT_g], fill(missing, length(ATT_by_gvar_weighted) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_by_gvar_weighted) - 1)))
+            end
+        end 
+        return results
+    end   
 end
+
+function calculate_agg_att_df(combined_diff_data)
+
+    combined_diff_data.treat = convert(Vector{Float64}, combined_diff_data.treat)
+    if covariates == false
+        combined_diff_data.y = convert(Vector{Float64}, combined_diff_data.diff_estimate)
+    elseif covariates == true
+        try
+            combined_diff_data.y = convert(Vector{Float64}, combined_diff_data.diff_estimate_covariates)
+        catch ex
+            if isa(ex, MethodError)
+                error("No covariates. Set covariates = false.")
+            else
+                rethrow(ex)
+            end 
+        end 
+    end
+
+
+    if "common_treatment_time" in DataFrames.names(combined_diff_data)
+        println("Calcualting aggregate ATT with covariates set to $covariates.")
+        ATT = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
+        treatment_time = combined_diff_data.common_treatment_time[1]
+        results = DataFrame(treatment_time = treatment_time, ATT = ATT)
+        # Compute jackknife SE if there are at least 2 controls and 2 treatment silos
+        if sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) >= 2
+            jackknives_common = []
+            for silo in combined_diff_data.silo_name
+                subset = combined_diff_data[combined_diff_data.silo_name .!= silo,:]
+                push!(jackknives_common, (hcat(fill(1.0, length(subset.treat)), subset.treat) \ subset.y)[2])
+            end 
+            jackknife_SE = sqrt(sum((jackknives_common .- ATT).^2) / length(jackknives_common))
+            results.jackknife_SE = [jackknife_SE]
+
+        elseif sum(combined_diff_data.treat .== 1) == 1 && sum(combined_diff_data.treat .== 0) == 1
+            if covariates == false 
+                SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var)))
+            elseif covariates == true 
+                SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var_covariates)))
+            end 
+            results.SE = [SE]
+         
+        # Do randomization inference in two cases: 1 treated and >1 controls, >1 treated and 1 control 
+        elseif (sum(combined_diff_data.treat .== 0) == 1 && sum(combined_diff_data.treat .== 1) >= 2) || (sum(combined_diff_data.treat .== 0) >= 2 && sum(combined_diff_data.treat .== 1) == 1)
+            if sum(combined_diff_data.treat .== 0) == 1
+                unique_value = 0
+                non_unique = 1
+            elseif sum(combined_diff_data.treat .== 1) == 1
+                unique_value = 1
+                non_unique = 0
+            end
+            beta_r = []
+            for i in 1:nrow(combined_diff_data)
+                combined_diff_data.treat .= non_unique
+                combined_diff_data.treat[i] = unique_value
+            
+                beta = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
+                push!(beta_r, abs(beta))
+            end
+        
+            p_value_RI = 0
+            for beta in beta_r 
+                p_value_RI += Int(beta >= abs(ATT))
+            end 
+            p_value_RI = p_value_RI/ length(beta_r)
+            results.p_value_RI = [p_value_RI]
+        end
+
+                
+        return results
+    else
+        if !(agg == "silo" || agg == "g" || agg == "gt")
+            error("Please specify a weighting scheme for ATT: \"silo\", \"gt\", or \"g\".")
+        end
+        println("Calcualting aggregate ATT with covariates set to $covariates and aggregation method set to $agg.")
+
+        if agg == "silo"            
+            treated_silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"])
+            silos_att = []
+            for silo in treated_silos
+                treated = combined_diff_data[combined_diff_data.silo_name .== silo,:]
+                control = combined_diff_data[combined_diff_data.treat .== 0,:]            
+                diff_times_treated = treated.diff_times
+                control = filter(row -> row.diff_times in diff_times_treated, control)            
+                local_df = vcat(control, treated)
+                beta_hat = hcat(fill(1.0, length(local_df.treat)), local_df.treat) \ local_df.y
+                push!(silos_att, beta_hat[2])                
+            end
+            jackknives_silo = []
+            for i in 1:length(silos_att)
+                # Exclude the i-th element and calculate the mean of the remaining elements
+                mean_excluding_i = mean([silos_att[1:i-1]..., silos_att[i+1:end]...])
+                # Push the result to the jackknives vector
+                push!(jackknives_silo, mean_excluding_i)
+            end
+            ATT_silo = mean(silos_att)
+            jackknife_SE = sqrt(sum((jackknives_silo .-ATT_silo).^2) / length(jackknives_silo))
+            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = silos_att, agg_ATT = vcat([ATT_silo], fill(missing, length(silos_att) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(silos_att) - 1)))          
+        elseif agg == "gt" || agg == "g"            
+            ATT_vec = []
+            gt_vec = []
+            for gt in unique(combined_diff_data[!, "(g;t)"])                
+                subset = combined_diff_data[(in.(gt[1], combined_diff_data[!, "(g;t)"])) .&& (in.(gt[2], combined_diff_data[!, "(g;t)"])),:]
+                beta_hat = hcat(fill(1.0, length(subset.treat)),subset.treat) \ subset.y
+                push!(ATT_vec, beta_hat[2])                
+                push!(gt_vec, gt)
+            end
+            if agg == "gt"
+                # Compute the jackknife means
+                jackknives_gt = []
+                for i in 1:length(ATT_vec)
+                    # Exclude the i-th element and calculate the mean of the remaining elements
+                    mean_excluding_i = mean([ATT_vec[1:i-1]..., ATT_vec[i+1:end]...])
+                    # Push the result to the jackknives vector
+                    push!(jackknives_gt, mean_excluding_i)
+                end
+                ATT_gt = mean(ATT_vec)
+                jackknife_SE = sqrt(sum((jackknives_gt .-ATT_gt).^2) / length(jackknives_gt))
+                results = DataFrame(gt = gt_vec, ATT_gt = ATT_vec, agg_ATT = vcat([ATT_gt], fill(missing, length(ATT_vec) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_vec) - 1)))
+                results.gt = [join((parse_date_to_string(date1, combined_diff_data.date_format[1]), parse_date_to_string(date2, combined_diff_data.date_format[1])), ";") for (date1, date2) in results[!, "gt"]]
+            end 
+            if agg == "g"                
+                gt_g = unique(combined_diff_data.gvar)
+                counters = Dict{Date, Int}()
+                for g in gt_g
+                    # Initialize g counter if it doesn't exist yet
+                    if !haskey(counters, g)
+                        counters[g] = 0
+                    end
+                    # Add counts of g
+                    for gt in gt_vec
+                        if g == gt[1]
+                            counters[g] += 1
+                        end 
+                    end
+                end                 
+                ATT_gt_df = DataFrame(ATT_gt = ATT_vec, gt = gt_vec)
+                g_vec = []
+                for g in ATT_gt_df.gt
+                    push!(g_vec, g[1])
+                end
+                ATT_gt_df.g = g_vec
+                g_weight = []
+                for g in ATT_gt_df.g
+                    push!(g_weight, 1/counters[g])
+                end
+                ATT_gt_df.g_weight = g_weight
+                ATT_gt_df.weighted_ATT = ATT_gt_df.g_weight .* ATT_gt_df.ATT_gt
+                ATT_by_gvar_weighted = []
+                for g in unique(ATT_gt_df.g)
+                    push!(ATT_by_gvar_weighted, sum(ATT_gt_df[ATT_gt_df.g .== g,"weighted_ATT"]))
+                end
+                # Compute the jackknife means
+                jackknives_g = []
+                for i in 1:length(ATT_by_gvar_weighted)
+                    # Exclude the i-th element and calculate the mean of the remaining elements
+                    mean_excluding_i = mean([ATT_by_gvar_weighted[1:i-1]..., ATT_by_gvar_weighted[i+1:end]...])
+                    # Push the result to the jackknives vector
+                    push!(jackknives_g, mean_excluding_i)
+                end
+                ATT_g = mean(ATT_by_gvar_weighted)
+                jackknife_SE = sqrt(sum((jackknives_g .-ATT_g).^2) / length(jackknives_g))
+                results = DataFrame(g = parse_date_to_string.(unique(ATT_gt_df.g), combined_diff_data.date_format[1]), ATT_g = ATT_by_gvar_weighted, agg_ATT = vcat([ATT_g], fill(missing, length(ATT_by_gvar_weighted) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_by_gvar_weighted) - 1)))
+            end
+        end 
+        return results
+    end   
+
+end 
 
 ### Misc Functions ###
 function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates = false)
