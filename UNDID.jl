@@ -1,17 +1,20 @@
 module UNDID
 
+# Declare required packages. 
+# All of these are part of base Julia with the exception of DataFrames
 using Statistics
 using LinearAlgebra
 using DataFrames
 using DelimitedFiles
 using Dates
 
-export create_init_csv, create_diff_df, fill_diff_df, read_csv_data, combine_diff_data, create_ATT_by_gt_by_silo, compute_ATT_staggered_by_silo,
-        create_trends_df, run_stage_two, combine_trends_data, compute_ATT_common_by_silo, compute_covariance_matrix, save_as_csv, run_stage_one,
-        run_stage_three, parse_string_to_date, parse_freq, parse_date_to_string
+export create_init_csv, create_diff_df, run_stage_one, # Stage 1 Functions
+fill_diff_df, create_trends_df,  run_stage_two, # Stage 2 Functions
+combine_diff_data, combine_trends_data, calculate_agg_att_df, run_stage_three, # Stage 3 Functions
+read_csv_data, compute_covariance_matrix, save_as_csv, parse_string_to_date, parse_date_to_string, parse_freq # Misc Functions
 
 ### Stage 1 Functions ###
-function create_init_csv(names=[], start_times=[], end_times=[], treatment_times=[]; covariates = false)
+function create_init_csv(names=[], start_times=[], end_times=[], treatment_times=[]; covariates = false, printmessage::Bool = false)
     
     # Check input vectors are the same length
     if length(names) == length(start_times) == length(end_times) == length(treatment_times)
@@ -43,14 +46,21 @@ function create_init_csv(names=[], start_times=[], end_times=[], treatment_times
         end
     end  
     # This saves and prints out the file location of the created csv
-    save_as_csv("init.csv", data, "array_of_arrays")   
+    filepath = save_as_csv("init.csv", data, "array_of_arrays", printmessage)   
+    return filepath
 end 
 
-function create_diff_df(csv; covariates = false, date_format = false, freq = false, freq_multiplier = false)
+function create_diff_df(csv::String; covariates = false, date_format = false, freq = false, freq_multiplier = false)
+
+    # This is for flexible date handling for the parse_string_to_date function
+    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
+    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
+    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
+    "nov" => "11", "dec" => "12")
 
     # Ensure that date_format is manually selected
-    if date_format == false
-        error("Please ensure the start_times, end_times and treatment_times are formatted identically and set date_format equal to one of the following:[\"yyyy/mm/dd\", \"yyyy-mm-dd\", \"yyyymmdd\", \"yyyy/dd/mm\", \"yyyy-dd-mm\", \"yyyyddmm\", \"dd/mm/yyyy\", \"dd-mm-yyyy\", \"ddmmyyyy\", \"mm/dd/yyyy\", \"mm-dd-yyyy\", \"mmddyyyy\",
+    if !(date_format in possible_formats_UNDID)
+        error("Please ensure the start_times, end_times and treatment_times are formatted identically and set the argument date_format equal to one of the following: [\"yyyy/mm/dd\", \"yyyy-mm-dd\", \"yyyymmdd\", \"yyyy/dd/mm\", \"yyyy-dd-mm\", \"yyyyddmm\", \"dd/mm/yyyy\", \"dd-mm-yyyy\", \"ddmmyyyy\", \"mm/dd/yyyy\", \"mm-dd-yyyy\", \"mmddyyyy\",
         \"mm/yyyy\", \"mm-yyyy\", \"mmyyyy\", \"yyyy\", \"ddmonyyyy\", \"yyyym00\"]")
     end 
 
@@ -66,7 +76,7 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
     elseif freq == "yearly"
         freq = Year(1)
     else
-        error("Please enter a frequency of data: 'daily', 'monthly', 'weekly' or 'yearly'")
+        error("Please enter a frequency of data as a string: 'daily', 'monthly', 'weekly' or 'yearly'")
     end 
 
     # Allow for weird frequencies like every 4 days or every 7 months etc
@@ -75,19 +85,13 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
     elseif typeof(freq_multiplier) <: Integer && freq_multiplier !== 0
         freq = freq*freq_multiplier
     else
-        error("freq_multiplier must be an integer or set to false.")
+        error("freq_multiplier must be a non-zero integer or set to false.")
     end
 
     # Read in the init.csv and make it a dataframe
     data = readdlm(csv, ',')
     header, rows  = data[1, :], data[2:end, :]
     df = DataFrame(rows, Symbol.(header))
-
-    # This is for flexible date handling for the parse_string_to_date function
-    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
-    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
-    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
-    "nov" => "11", "dec" => "12")
     
     # Converting the dates into date type objects
     try 
@@ -114,11 +118,11 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
         for group in df[:, "silo_name"]
         
             times = df[df[!, "silo_name"] .== group, "start_time"][1]:freq:df[df[!, "silo_name"] .== group, "end_time"][1]       
-            if df[df[!, "silo_name"] .== group, "treatment_time"][1] !== Date(0)
+            if df[df[!, "silo_name"] .== group, "treatment_time"][1] !== "control"
                 # These are the years that matter for treated groups                
                 combinations = [(t1, t2) for t1 in times, t2 in times if t1 > t2 && Dates.value(t1 - t2) >= Dates.value(freq) && Dates.value(df[df[!, "silo_name"] .== group, "treatment_time"][1] - freq) == Dates.value(t2)]
                 treat = 1                
-            elseif df[df[!, "silo_name"] .== group, "treatment_time"][1] == Date(0)
+            elseif df[df[!, "silo_name"] .== group, "treatment_time"][1] == "control"
                 # These are the years that matter for untreated groups
                 combinations = [(t1, t2) for t1 in times, t2 in times if t1 > t2 && Dates.value(t1 - t2) >= Dates.value(freq)]
                 treat = 0
@@ -150,9 +154,9 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
         common_treatment_time = parse_date_to_string(df[df[!, "treatment_time"] .!== 0, "treatment_time"][1], date_format)
 
         for silo_name in unique(df.silo_name)
-            if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== Date(0)
+            if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== "control"
                 treat = 1
-            elseif df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] == Date(0)
+            elseif df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] == "control"
                 treat = 0
             end
             push!(diff_df, [silo_name, treat, common_treatment_time])
@@ -214,59 +218,13 @@ function create_diff_df(csv; covariates = false, date_format = false, freq = fal
 end 
 
 function run_stage_one(names, start_times, end_times, treatment_times; covariates = false, date_format = false, freq = false, freq_multiplier = false)
-    csv = create_init_csv(names, start_times, end_times, treatment_times)
+    csv = create_init_csv(names, start_times, end_times, treatment_times, printmessage = true)
     return create_diff_df(csv, covariates = covariates, date_format = date_format, freq = freq, freq_multiplier = freq_multiplier)
 end
 
 ### Stage 2 Functions ### 
-function read_csv_data(filepath_to_csv_data)
 
-    # This is for flexible date handling for the parse_string_to_date function
-    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
-    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
-    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
-    "nov" => "11", "dec" => "12")
-
-    # Reads in the empty_diff_df.csv
-    data = readdlm(filepath_to_csv_data, ',')
-    header = data[1, :]    
-    rows = data[2:end, :]
-    df_readin = DataFrame(rows, Symbol.(header))    
-    if "silo_name" in DataFrames.names(df_readin)
-        df_readin.silo_name = string.(df_readin.silo_name)
-    end
-    if "covariates" in DataFrames.names(df_readin)
-        transform!(df_readin, :covariates => ByRow(s -> [String(sub) for sub in split(replace(replace(strip(s, ['[' , ']', '"']), "\"" => ""), " " => ""), ";")]) => :covariates)
-    end
-    if "diff_times" in DataFrames.names(df_readin)        
-        df_readin_date_format = df_readin.date_format[1]
-
-        df_readin.diff_times = split.(df_readin.diff_times, ";")        
-        transform!(df_readin, :diff_times => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :diff_times)
-
-        if "gvar" in DataFrames.names(df_readin)
-            df_readin.gvar = parse_string_to_date.(string.(df_readin.gvar), df_readin_date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
-        end 
-        df_readin[!, "(g;t)"] = split.(df_readin[!, "(g;t)"], ";")
-        transform!(df_readin, :"(g;t)" => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :"(g;t)")
-    end 
-    if "time" in DataFrames.names(df_readin)
-        
-        df_readin.time = parse_string_to_date.(string.(df_readin.time), df_readin.date_format[1], Ref(possible_formats_UNDID), Ref(month_map_UNDID))
-
-        # Now based on Date object we can created a column "period" that will translate each date to an associated integer period
-        dates_vector  = sort(unique(df_readin.time))
-        date_dict = Dict(zip(dates_vector, 1:length(dates_vector)))
-        df_readin.period = [date_dict[date] for date in df_readin.time]
-
-        # Likewise we define the treatment_time as a period as well
-        df_readin[df_readin.treatment_time .!= "control", "treatment_time"] = parse_string_to_date.(string.(df_readin[df_readin.treatment_time .!= "control",:].treatment_time), df_readin.date_format[1], Ref(possible_formats_UNDID), Ref(month_map_UNDID))
-        df_readin.treatment_period = [x isa Date ? date_dict[x] : missing for x in df_readin.treatment_time]
-    end 
-    return df_readin
-end
-
-function fill_diff_df(silo_name, empty_diff_df, silo_data; treatment_time = false)
+function fill_diff_df(silo_name::String, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false)
        
     empty_diff_df_date_format = empty_diff_df.date_format[1]
     # Compute diff (gamma) estimates and standard errors in the case of common treatment times across silos
@@ -386,7 +344,7 @@ function fill_diff_df(silo_name, empty_diff_df, silo_data; treatment_time = fals
     return empty_diff_df        
 end 
 
-function create_trends_df(silo_name, silo_data, freq; covariates = ["none"], treatment_time = missing, date_format)    
+function create_trends_df(silo_name::String, silo_data::DataFrame, freq::Date; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::String)    
 
     # Define column headers
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates", "date_format", "freq"]
@@ -418,7 +376,7 @@ function create_trends_df(silo_name, silo_data, freq; covariates = ["none"], tre
     return trends_df
 end
 
-function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data, time_column, outcome_column, date_format_local; renaming_dictionary = false)
+function run_stage_two(filepath_to_empty_diff_df::String, silo_name::String, silo_data::DataFrame, time_column::String, outcome_column::String, date_format_local::String; renaming_dictionary = false)
     
     # Given a filepath to the empty_diff_df, the name of the local silo, and 
     # a dataframe of the local silo data, runs all the necessary Stage 2 functions
@@ -429,10 +387,7 @@ function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data, time_col
     # First doing some pre-processing and error checking
 
     # Check that the silo_name is in the empty_diff_df
-    silo_name = string(silo_name)
-    if silo_name in unique(empty_diff_df.silo_name)
-        # do nothing
-    else
+    if !(silo_name in unique(empty_diff_df.silo_name))
         error("Please ensure that the silo_name exists in the silo_name column of the empty_diff_df.")
     end 
 
@@ -518,7 +473,7 @@ function run_stage_two(filepath_to_empty_diff_df, silo_name, silo_data, time_col
 end 
 
 ### Stage 3 Functions ###
-function combine_diff_data(dir_path; save_csv = false)
+function combine_diff_data(dir_path::String; save_csv::Bool = false)
     
     # Collects all the filled_diff_df_... csv files
     files = readdir(dir_path)
@@ -551,7 +506,7 @@ function combine_diff_data(dir_path; save_csv = false)
     return data
 end
 
-function combine_trends_data(dir_path; save_csv = false)
+function combine_trends_data(dir_path::String; save_csv::Bool = false)
     
     # Collects all the trends_data_... csv files
     files = readdir(dir_path)
@@ -579,423 +534,81 @@ function combine_trends_data(dir_path; save_csv = false)
 
 end 
 
-function create_ATT_by_gt_by_silo(combined_diff_data; save_csv = false)
-    
-    # Creating some preallocation vectors
-    treated_silo = []
-    control_silo = []
-    diff_times = []
-    gt_vec = []
-    ATT = []
-    SE_ATT = []
-    ATT_covariates = []
-    SE_ATT_covariates = []
-    covariates = []
-    covariate = combined_diff_data[!, "covariates"][1]
-
-    # For every treated silo
-    for treated_group in unique(combined_diff_data[combined_diff_data[!,"treat"] .== 1,"silo_name"])
-
-        # For every relevant time combination for said treated silo
-        for time in unique(combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_group,"diff_times"])
-
-            # For every control group that has a corresponding time combination
-            for control_group in combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 0), "silo_name"]
-            
-                # Compute the ATT(g,t) for that treated-control combination
-                control_diff = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 0) .&& (combined_diff_data[!, "silo_name"] .== control_group), "diff_estimate"]
-                treated_diff = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 1) .&& (combined_diff_data[!, "silo_name"] .== treated_group), "diff_estimate"]
-                attgt = treated_diff - control_diff
-                
-                se_control_diff = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 0) .&& (combined_diff_data[!, "silo_name"] .== control_group), "diff_var"]
-                se_treated_diff = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 1) .&& (combined_diff_data[!, "silo_name"] .== treated_group), "diff_var"]
-                
-                # Compute the ATT(g,t) for that treated-control combination (with covariates)
-                if covariate[1] != "none"
-                    control_diff_with_covariates = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 0) .&& (combined_diff_data[!, "silo_name"] .== control_group), "diff_estimate_covariates"]
-                    treated_diff_with_covariates = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 1) .&& (combined_diff_data[!, "silo_name"] .== treated_group), "diff_estimate_covariates"]
-                    attgt_covariates = treated_diff_with_covariates - control_diff_with_covariates
-                    push!(ATT_covariates, attgt_covariates[1])
-
-                    se_control_diff_with_covariates = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 0) .&& (combined_diff_data[!, "silo_name"] .== control_group), "diff_var_covariates"]
-                    se_treated_diff_with_covariates = combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 1) .&& (combined_diff_data[!, "silo_name"] .== treated_group), "diff_var_covariates"]
-                    push!(SE_ATT_covariates, sqrt((se_control_diff_with_covariates + se_treated_diff_with_covariates)[1]))
-                else
-                    push!(ATT_covariates, "n/a")
-                    push!(SE_ATT_covariates, "n/a")
-                end 
-                
-                # Push all results to the preallocation vectors
-                push!(treated_silo, treated_group)
-                push!(control_silo, control_group)
-                push!(diff_times, time)
-                push!(gt_vec, combined_diff_data[(in.(time[1], combined_diff_data[!, "diff_times"])) .&& (in.(time[2], combined_diff_data[!, "diff_times"])) .&& (combined_diff_data[!, "treat"] .== 1) .&& (combined_diff_data[!, "silo_name"] .== treated_group), "(g;t)"][1])
-                push!(ATT, attgt[1])
-                push!(SE_ATT,  sqrt((se_control_diff + se_treated_diff)[1]))              
-                push!(covariates, covariate)
-
-            end 
-
-        end 
-
-    end 
-
-    # Turn the filled preallocation vectors into a dataframe
-    ATT_by_gt_by_silo_df = ATT_by_gt_by_silo_df = DataFrame("treated_silo" => treated_silo, "control_silo" => control_silo,
-    "diff_times" => diff_times, "ATT" => ATT, "SE_ATT" => SE_ATT, "ATT_covariates" => ATT_covariates, "SE_ATT_covariates" => SE_ATT_covariates,
-    "(g;t)" => gt_vec, "covariates" => covariates)
-
-    # If save_as_csv == true then save as a csv as well
-    if save_csv == true
-        copy_df = copy(ATT_by_gt_by_silo_df)
-        copy_df.covariates = fill(join(copy_df.covariates[1], ";"), nrow(copy_df))           
-        # Return date objects to strings
-        att_by_gt_by_silo_date_format = combined_diff_data.date_format[1]
-        copy_df[!, "(g;t)"] = [join((parse_date_to_string(date1, att_by_gt_by_silo_date_format), parse_date_to_string(date2, att_by_gt_by_silo_date_format)), ";") for (date1, date2) in copy_df[!, "(g;t)"]]
-        copy_df.diff_times = [join((parse_date_to_string(date1, att_by_gt_by_silo_date_format), parse_date_to_string(date2, att_by_gt_by_silo_date_format)), ";") for (date1, date2) in copy_df.diff_times]
-        copy_df.date_format = fill(att_by_gt_by_silo_date_format, nrow(copy_df))
-        save_as_csv("ATT_by_gt_by_silo.csv", copy_df, "df")        
-    end
-
-
-    return ATT_by_gt_by_silo_df
-
-end
-
-function compute_ATT_staggered_by_silo(ATT_by_gt_by_silo)
-
-    # Preallocation vectors
-    ATTs_bysilo = []
-    ATT_bysilo_covariates = []
-    treated_group = []
-    avg_ATT_across_silos = Vector{Any}(fill(nothing, length(unique(ATT_by_gt_by_silo[!,"treated_silo"]))))
-    avg_ATT_across_silos_covariates = Vector{Any}(fill(nothing, length(unique(ATT_by_gt_by_silo[!,"treated_silo"]))))
-    covariates = Vector{Any}(fill(nothing, length(unique(ATT_by_gt_by_silo[!,"treated_silo"]))))
-
-    # Compute ATT by silo
-    for group in unique(ATT_by_gt_by_silo[!,"treated_silo"])
-        
-        # Compute ATT by silo without covariates
-        mean_att = mean(ATT_by_gt_by_silo[ATT_by_gt_by_silo[!, "treated_silo"] .== group, "ATT"])
-        push!(ATTs_bysilo, mean_att)
-        push!(treated_group, group)
-
-        # Compute ATT by silo with covariates (if covariates exist)
-        if ATT_by_gt_by_silo[!, "covariates"][1][1] != "none"
-            mean_att_covariates = mean(ATT_by_gt_by_silo[ATT_by_gt_by_silo[!, "treated_silo"] .== group, "ATT_covariates"])
-            push!(ATT_bysilo_covariates, mean_att_covariates)
-        elseif ATT_by_gt_by_silo[!, "covariates"][1][1] == "none"
-            push!(ATT_bysilo_covariates, "n/a")
-        end 
-        
-    end 
-
-    # Take average ATT across silos and display covariates
-    avg_ATT_across_silos[1] = mean(ATTs_bysilo)
-    if ATT_bysilo_covariates[1] != "n/a"
-        avg_ATT_across_silos_covariates[1] = mean(ATT_bysilo_covariates)
-        covariates[1] = ATT_by_gt_by_silo[!, "covariates"][1]
-    end
-
-    # Construct dataframe
-    ATTs_bysilo_df = DataFrame(treated_silo = treated_group, ATT_bysilo = ATTs_bysilo, ATT_bysilo_covariates = ATT_bysilo_covariates,
-    avg_ATT_across_silos = avg_ATT_across_silos, avg_ATT_across_silos_covariates = avg_ATT_across_silos_covariates, covariates = covariates)
-     
-    # Save as csv
-    save_as_csv("UNDID_results.csv", ATTs_bysilo_df, "df")
-
-    # Return dataframe
-    return ATTs_bysilo_df
-end 
-
-function compute_ATT_common_by_silo(combined_diff_data)
-
-    
-    ATTs_bysilos = []
-    SE_ATTs_bysilos = []    
-    treated_group = []
-    control_group = []
-    jacknives = [] 
-    jackknives_covariates = []
-
-    # Telling the next for loop whether or not to include covariate related calculations
-    if combined_diff_data[!,"covariates"][1] == ["none"]
-        cov_on = false        
-    else
-        cov_on = true   
-        ATTs_bysilos_covariates = []
-        SE_ATTs_bysilos_covariates = []        
-    end
-
-    
-    # This for loop calculates the ATTs by silo pairings
-    if cov_on == true
-        for treated_silo in combined_diff_data[combined_diff_data[!, "treat"] .== 1, "silo_name"]
-            for control_silo in combined_diff_data[combined_diff_data[!, "treat"] .== 0, "silo_name"]
-                push!(treated_group, treated_silo)
-                push!(control_group, control_silo)
-                push!(ATTs_bysilos, (combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_silo, "diff_estimate"] - combined_diff_data[combined_diff_data[!, "silo_name"] .== control_silo, "diff_estimate"])[1])            
-                push!(SE_ATTs_bysilos, sqrt((combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_silo, "diff_var"] + combined_diff_data[combined_diff_data[!, "silo_name"] .== control_silo, "diff_var"])[1]))                
-                push!(ATTs_bysilos_covariates, (combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_silo, "diff_estimate_covariates"] - combined_diff_data[combined_diff_data[!, "silo_name"] .== control_silo, "diff_estimate_covariates"])[1])
-                push!(SE_ATTs_bysilos_covariates, sqrt((combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_silo, "diff_var_covariates"] + combined_diff_data[combined_diff_data[!, "silo_name"] .== control_silo, "diff_var_covariates"])[1]))
-            end 
-        end
-    elseif cov_on == false
-        for treated_silo in combined_diff_data[combined_diff_data[!, "treat"] .== 1, "silo_name"]
-            for control_silo in combined_diff_data[combined_diff_data[!, "treat"] .== 0, "silo_name"]
-                push!(treated_group, treated_silo)
-                push!(control_group, control_silo)
-                push!(ATTs_bysilos, (combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_silo, "diff_estimate"] - combined_diff_data[combined_diff_data[!, "silo_name"] .== control_silo, "diff_estimate"])[1])            
-                push!(SE_ATTs_bysilos, sqrt((combined_diff_data[combined_diff_data[!, "silo_name"] .== treated_silo, "diff_var"] + combined_diff_data[combined_diff_data[!, "silo_name"] .== control_silo, "diff_var"])[1]))
-            end 
-        end
-        ATTs_bysilos_covariates = Vector{Any}(fill(nothing, length(ATTs_bysilos)))
-        SE_ATTs_bysilos_covariates = Vector{Any}(fill(nothing, length(ATTs_bysilos)))  
-    end
-
-
-    
-    # This portion calculates the aggregate ATTs
-    ATTs = Vector{Any}(fill(nothing, length(ATTs_bysilos)))
-    ATTs_covariates = Vector{Any}(fill(nothing, length(ATTs_bysilos)))
-    jackknife_SE_aggregate_ATT = Vector{Any}(fill(nothing, length(ATTs_bysilos)))
-    jackknife_SE_aggregate_ATT_covariates = Vector{Any}(fill(nothing, length(ATTs_bysilos)))
-
-    X = convert(Matrix{Float64}, hcat(fill(1, nrow(combined_diff_data)), combined_diff_data.treat))
-    Y = convert(Vector{Float64}, combined_diff_data.diff_estimate)
-    beta_hat = X\Y
-    ATTs[1] = beta_hat[2]
-
-    cov_check = combined_diff_data.covariates[1]
-    if cov_check != ["none"]
-        Y = convert(Vector{Float64}, combined_diff_data.diff_estimate_covariates)
-        beta_hat = X\Y
-        ATTs_covariates[1] =  beta_hat[2]    
-    end
-
-    # Calculate the jackknife SE(ATT) if there are >= 2 control and >=2 treated silos
-    if nrow(combined_diff_data[combined_diff_data[!, "treat"] .== 0,:]) >= 2 && nrow(combined_diff_data[combined_diff_data[!, "treat"] .== 1,:]) >= 2
-        # Compute first for the case of no covariates
-        for silo in combined_diff_data[!, "silo_name"]
-            X = convert(Matrix{Float64}, hcat(fill(1, nrow(combined_diff_data[combined_diff_data[!, "silo_name"] .!== silo,:])), combined_diff_data[combined_diff_data[!, "silo_name"] .!== silo, "treat"]))
-            Y = convert(Vector{Float64}, combined_diff_data[combined_diff_data[!, "silo_name"] .!== silo, "diff_estimate"])
-            push!(jacknives, (X\Y)[2])
-        end
-        jackknife_SE_aggregate_ATT[1] = 0
-        for i in 1:length(jacknives)
-            jackknife_SE_aggregate_ATT[1] += (ATTs[1] - jacknives[i])^2
-        end
-        jackknife_SE_aggregate_ATT[1] = sqrt((1/length(jacknives))*jackknife_SE_aggregate_ATT[1])
-        
-        # Compute as well for the case of covariates
-        if cov_check != ["none"]
-            for silo in combined_diff_data[!, "silo_name"]
-                X = convert(Matrix{Float64}, hcat(fill(1, nrow(combined_diff_data[combined_diff_data[!, "silo_name"] .!== silo,:])), combined_diff_data[combined_diff_data[!, "silo_name"] .!== silo, "treat"]))
-                Y = convert(Vector{Float64}, combined_diff_data[combined_diff_data[!, "silo_name"] .!== silo, "diff_estimate_covariates"])
-                push!(jackknives_covariates, (X\Y)[2])
-            end
-            jackknife_SE_aggregate_ATT_covariates[1] = 0
-            for i in 1:length(jackknives_covariates)
-                jackknife_SE_aggregate_ATT_covariates[1] += (ATTs[1] - jackknives_covariates[i])^2
-            end
-            jackknife_SE_aggregate_ATT_covariates[1] = sqrt(jackknife_SE_aggregate_ATT_covariates[1])
-        end 
-    end 
-
-
-    # Turn all those vectors into a Dataframe
-    undid_results = DataFrame(treated_group = treated_group, control_group = control_group, ATT_bysilo = ATTs_bysilos, SE_ATT_bysilo = SE_ATTs_bysilos,
-    ATT_bysilo_covariates = ATTs_bysilos_covariates, SE_ATT_bysilos_covariates = SE_ATTs_bysilos_covariates, aggregate_ATT = ATTs,
-    jackknife_SE_aggregate_ATT = jackknife_SE_aggregate_ATT, aggregate_ATT_covariates = ATTs_covariates, jackknife_SE_aggregate_ATT_covariates = jackknife_SE_aggregate_ATT_covariates)
-
-    # Save as csv
-    save_as_csv("UNDID_results.csv", undid_results, "df")
-
-
-    # Return the dataframe
-    return undid_results    
-end
-
-function run_stage_three(dir_path; agg::String = "silo", covariates::Bool = false, save_all_csvs::Bool = false)
+function run_stage_three(dir_path::String; agg::String = "silo", covariates::Bool = false, save_all_csvs::Bool = false)
 
     combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs) 
     combined_trends_data = combine_trends_data(dir_path, save_csv = save_all_csvs)
 
-
     # Generate all the necessary matrices to do the randomization inference
     if "RI_inference" in DataFrames.names(combined_diff_data)
-        RI_inference_data = combined_diff_data[combined_diff_data.RI_inference .== 1,:]   
+        # Filter for just the data that is reflective of the silos true treatment status 
         diff_matrix_no_RI = combined_diff_data[combined_diff_data.RI_inference .== 0,:]
+
+        # Grab the silo names and their associated gvar(s) and treatment status 
+        silos = unique(diff_matrix_no_RI.silo_name)
+        gvar_treat = []
+        for silo in silos
+            push!(gvar_treat, (unique(diff_matrix_no_RI[diff_matrix_no_RI.silo_name .== silo, "gvar"]), unique(diff_matrix_no_RI[diff_matrix_no_RI.silo_name .== silo, "treat"])))
+        end
+        
+        # Create a df indicating the original gvar(s) and treatment status of silos
+        # And use circshift to shuffle the gvar(s) and treatment status until a full loop is completed
+        df = DataFrame(silo_name = silos, D = gvar_treat)
+        for i in 1:nrow(df)
+            df[!, Symbol("D_$(i)")] = circshift(df.D, i)
+        end
+
+        # Create a dictionary of empty dataframes for each rotation in the circshift
+        RI_matrices = Dict{Int, DataFrame}()
+        for i in 1:nrow(df)
+            empty_matrix = combined_diff_data[combined_diff_data.gvar .== false, :]  
+            RI_matrices[i] = empty_matrix
+        end
+
+        # Fill each one of those dataframes with the gvar(s) and treatment status based on the circshift assignment
+        for i in 1:length(RI_matrices)
+            D_star = Symbol("D_$i")
+            for silo in silos
+                
+                if df[df.silo_name .== silo, D_star][1][2][1] == 0
+                    rows_to_add = combined_diff_data[combined_diff_data.silo_name .== silo .&& in.(combined_diff_data.gvar, Ref(df[df.silo_name .== silo, D_star][1][1])),:]
+                    RI_matrices[i] = vcat(RI_matrices[i], rows_to_add)
+                    
+                    RI_matrices[i][RI_matrices[i].silo_name .== silo, "treat"] .= 0
+                else
+                    rows_to_add = combined_diff_data[combined_diff_data.silo_name .== silo .&& in.(combined_diff_data.gvar, Ref(df[df.silo_name .== silo, D_star][1][1])),:]
+                    RI_matrices[i] = vcat(RI_matrices[i], rows_to_add)
+                    
+                    RI_matrices[i][RI_matrices[i].silo_name .== silo, "treat"] .= 1
+                end 
+            end 
+        end 
+        
+        # Calculate att by specified aggregation method 
+        results = calculate_agg_att_df(diff_matrix_no_RI; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs, printinfo = true)  
+
+        # Compute p-value based on randomization inference and add to results as a column
+        original_ATT = results.agg_ATT[1]
+        RI_ATT = []
+        for i in 1:length(RI_matrices)
+            RI_ATT_single = calculate_agg_att_df(RI_matrices[i]; agg = agg, covariates = covariates, save_all_csvs = false, printinfo = false).agg_ATT[1]
+            push!(RI_ATT, RI_ATT_single)
+        end 
+
+        p_value_RI = 0
+        for ATT in RI_ATT
+            p_value_RI += Int(abs(ATT) >= abs(original_ATT))
+        end 
+        p_value_RI = p_value_RI/ length(RI_ATT)
+        results.p_value_RI = vcat(p_value_RI, fill(missing, nrow(results)-1))
+        return results
     end 
 
     
-    combined_diff_data.treat = convert(Vector{Float64}, combined_diff_data.treat)
-    if covariates == false
-        combined_diff_data.y = convert(Vector{Float64}, combined_diff_data.diff_estimate)
-    elseif covariates == true
-        try
-            combined_diff_data.y = convert(Vector{Float64}, combined_diff_data.diff_estimate_covariates)
-        catch ex
-            if isa(ex, MethodError)
-                error("No covariates. Set covariates = false.")
-            else
-                rethrow(ex)
-            end 
-        end 
-    end
-
-
-    if "common_treatment_time" in DataFrames.names(combined_diff_data)
-        println("Calcualting aggregate ATT with covariates set to $covariates.")
-        ATT = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
-        treatment_time = combined_diff_data.common_treatment_time[1]
-        results = DataFrame(treatment_time = treatment_time, ATT = ATT)
-        # Compute jackknife SE if there are at least 2 controls and 2 treatment silos
-        if sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) >= 2
-            jackknives_common = []
-            for silo in combined_diff_data.silo_name
-                subset = combined_diff_data[combined_diff_data.silo_name .!= silo,:]
-                push!(jackknives_common, (hcat(fill(1.0, length(subset.treat)), subset.treat) \ subset.y)[2])
-            end 
-            jackknife_SE = sqrt(sum((jackknives_common .- ATT).^2) / length(jackknives_common))
-            results.jackknife_SE = [jackknife_SE]
-
-        elseif sum(combined_diff_data.treat .== 1) == 1 && sum(combined_diff_data.treat .== 0) == 1
-            if covariates == false 
-                SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var)))
-            elseif covariates == true 
-                SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var_covariates)))
-            end 
-            results.SE = [SE]
-         
-        # Do randomization inference in two cases: 1 treated and >1 controls, >1 treated and 1 control 
-        elseif (sum(combined_diff_data.treat .== 0) == 1 && sum(combined_diff_data.treat .== 1) >= 2) || (sum(combined_diff_data.treat .== 0) >= 2 && sum(combined_diff_data.treat .== 1) == 1)
-            if sum(combined_diff_data.treat .== 0) == 1
-                unique_value = 0
-                non_unique = 1
-            elseif sum(combined_diff_data.treat .== 1) == 1
-                unique_value = 1
-                non_unique = 0
-            end
-            beta_r = []
-            for i in 1:nrow(combined_diff_data)
-                combined_diff_data.treat .= non_unique
-                combined_diff_data.treat[i] = unique_value
-            
-                beta = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
-                push!(beta_r, abs(beta))
-            end
-        
-            p_value_RI = 0
-            for beta in beta_r 
-                p_value_RI += Int(beta >= abs(ATT))
-            end 
-            p_value_RI = p_value_RI/ length(beta_r)
-            results.p_value_RI = [p_value_RI]
-        end
-
-                
-        return results
-    else
-        if !(agg == "silo" || agg == "g" || agg == "gt")
-            error("Please specify a weighting scheme for ATT: \"silo\", \"gt\", or \"g\".")
-        end
-        println("Calcualting aggregate ATT with covariates set to $covariates and aggregation method set to $agg.")
-
-        if agg == "silo"            
-            treated_silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"])
-            silos_att = []
-            for silo in treated_silos
-                treated = combined_diff_data[combined_diff_data.silo_name .== silo,:]
-                control = combined_diff_data[combined_diff_data.treat .== 0,:]            
-                diff_times_treated = treated.diff_times
-                control = filter(row -> row.diff_times in diff_times_treated, control)            
-                local_df = vcat(control, treated)
-                beta_hat = hcat(fill(1.0, length(local_df.treat)), local_df.treat) \ local_df.y
-                push!(silos_att, beta_hat[2])                
-            end
-            jackknives_silo = []
-            for i in 1:length(silos_att)
-                # Exclude the i-th element and calculate the mean of the remaining elements
-                mean_excluding_i = mean([silos_att[1:i-1]..., silos_att[i+1:end]...])
-                # Push the result to the jackknives vector
-                push!(jackknives_silo, mean_excluding_i)
-            end
-            ATT_silo = mean(silos_att)
-            jackknife_SE = sqrt(sum((jackknives_silo .-ATT_silo).^2) / length(jackknives_silo))
-            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = silos_att, agg_ATT = vcat([ATT_silo], fill(missing, length(silos_att) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(silos_att) - 1)))          
-        elseif agg == "gt" || agg == "g"            
-            ATT_vec = []
-            gt_vec = []
-            for gt in unique(combined_diff_data[!, "(g;t)"])                
-                subset = combined_diff_data[(in.(gt[1], combined_diff_data[!, "(g;t)"])) .&& (in.(gt[2], combined_diff_data[!, "(g;t)"])),:]
-                beta_hat = hcat(fill(1.0, length(subset.treat)),subset.treat) \ subset.y
-                push!(ATT_vec, beta_hat[2])                
-                push!(gt_vec, gt)
-            end
-            if agg == "gt"
-                # Compute the jackknife means
-                jackknives_gt = []
-                for i in 1:length(ATT_vec)
-                    # Exclude the i-th element and calculate the mean of the remaining elements
-                    mean_excluding_i = mean([ATT_vec[1:i-1]..., ATT_vec[i+1:end]...])
-                    # Push the result to the jackknives vector
-                    push!(jackknives_gt, mean_excluding_i)
-                end
-                ATT_gt = mean(ATT_vec)
-                jackknife_SE = sqrt(sum((jackknives_gt .-ATT_gt).^2) / length(jackknives_gt))
-                results = DataFrame(gt = gt_vec, ATT_gt = ATT_vec, agg_ATT = vcat([ATT_gt], fill(missing, length(ATT_vec) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_vec) - 1)))
-                results.gt = [join((parse_date_to_string(date1, combined_diff_data.date_format[1]), parse_date_to_string(date2, combined_diff_data.date_format[1])), ";") for (date1, date2) in results[!, "gt"]]
-            end 
-            if agg == "g"                
-                gt_g = unique(combined_diff_data.gvar)
-                counters = Dict{Date, Int}()
-                for g in gt_g
-                    # Initialize g counter if it doesn't exist yet
-                    if !haskey(counters, g)
-                        counters[g] = 0
-                    end
-                    # Add counts of g
-                    for gt in gt_vec
-                        if g == gt[1]
-                            counters[g] += 1
-                        end 
-                    end
-                end                 
-                ATT_gt_df = DataFrame(ATT_gt = ATT_vec, gt = gt_vec)
-                g_vec = []
-                for g in ATT_gt_df.gt
-                    push!(g_vec, g[1])
-                end
-                ATT_gt_df.g = g_vec
-                g_weight = []
-                for g in ATT_gt_df.g
-                    push!(g_weight, 1/counters[g])
-                end
-                ATT_gt_df.g_weight = g_weight
-                ATT_gt_df.weighted_ATT = ATT_gt_df.g_weight .* ATT_gt_df.ATT_gt
-                ATT_by_gvar_weighted = []
-                for g in unique(ATT_gt_df.g)
-                    push!(ATT_by_gvar_weighted, sum(ATT_gt_df[ATT_gt_df.g .== g,"weighted_ATT"]))
-                end
-                # Compute the jackknife means
-                jackknives_g = []
-                for i in 1:length(ATT_by_gvar_weighted)
-                    # Exclude the i-th element and calculate the mean of the remaining elements
-                    mean_excluding_i = mean([ATT_by_gvar_weighted[1:i-1]..., ATT_by_gvar_weighted[i+1:end]...])
-                    # Push the result to the jackknives vector
-                    push!(jackknives_g, mean_excluding_i)
-                end
-                ATT_g = mean(ATT_by_gvar_weighted)
-                jackknife_SE = sqrt(sum((jackknives_g .-ATT_g).^2) / length(jackknives_g))
-                results = DataFrame(g = parse_date_to_string.(unique(ATT_gt_df.g), combined_diff_data.date_format[1]), ATT_g = ATT_by_gvar_weighted, agg_ATT = vcat([ATT_g], fill(missing, length(ATT_by_gvar_weighted) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_by_gvar_weighted) - 1)))
-            end
-        end 
-        return results
-    end   
+    return calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs)   
 end
 
-function calculate_agg_att_df(combined_diff_data)
+function calculate_agg_att_df(combined_diff_data::DataFrame; agg::String = "silo", covariates::Bool = false, save_all_csvs::Bool = false, printinfo::Bool = true)
 
     combined_diff_data.treat = convert(Vector{Float64}, combined_diff_data.treat)
     if covariates == false
@@ -1051,12 +664,12 @@ function calculate_agg_att_df(combined_diff_data)
                 combined_diff_data.treat[i] = unique_value
             
                 beta = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
-                push!(beta_r, abs(beta))
+                push!(beta_r, beta)
             end
         
             p_value_RI = 0
             for beta in beta_r 
-                p_value_RI += Int(beta >= abs(ATT))
+                p_value_RI += Int(abs(beta) >= abs(ATT))
             end 
             p_value_RI = p_value_RI/ length(beta_r)
             results.p_value_RI = [p_value_RI]
@@ -1068,7 +681,9 @@ function calculate_agg_att_df(combined_diff_data)
         if !(agg == "silo" || agg == "g" || agg == "gt")
             error("Please specify a weighting scheme for ATT: \"silo\", \"gt\", or \"g\".")
         end
-        println("Calcualting aggregate ATT with covariates set to $covariates and aggregation method set to $agg.")
+        if printinfo == true
+            println("Calcualting aggregate ATT with covariates set to $covariates and aggregation method set to $agg.")
+        end 
 
         if agg == "silo"            
             treated_silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"])
@@ -1165,6 +780,53 @@ function calculate_agg_att_df(combined_diff_data)
 end 
 
 ### Misc Functions ###
+function read_csv_data(filepath_to_csv_data::String)
+
+    # This is for flexible date handling for the parse_string_to_date function
+    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
+    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
+    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
+    "nov" => "11", "dec" => "12")
+
+    # Reads in the empty_diff_df.csv
+    data = readdlm(filepath_to_csv_data, ',')
+    header = data[1, :]    
+    rows = data[2:end, :]
+    df_readin = DataFrame(rows, Symbol.(header))    
+    if "silo_name" in DataFrames.names(df_readin)
+        df_readin.silo_name = string.(df_readin.silo_name)
+    end
+    if "covariates" in DataFrames.names(df_readin)
+        transform!(df_readin, :covariates => ByRow(s -> [String(sub) for sub in split(replace(replace(strip(s, ['[' , ']', '"']), "\"" => ""), " " => ""), ";")]) => :covariates)
+    end
+    if "diff_times" in DataFrames.names(df_readin)        
+        df_readin_date_format = df_readin.date_format[1]
+
+        df_readin.diff_times = split.(df_readin.diff_times, ";")        
+        transform!(df_readin, :diff_times => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :diff_times)
+
+        if "gvar" in DataFrames.names(df_readin)
+            df_readin.gvar = parse_string_to_date.(string.(df_readin.gvar), df_readin_date_format, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+        end 
+        df_readin[!, "(g;t)"] = split.(df_readin[!, "(g;t)"], ";")
+        transform!(df_readin, :"(g;t)" => ByRow(time -> (parse_string_to_date(time[1], df_readin_date_format, possible_formats_UNDID, month_map_UNDID), parse_string_to_date(time[2], df_readin_date_format, possible_formats_UNDID, month_map_UNDID))) => :"(g;t)")
+    end 
+    if "time" in DataFrames.names(df_readin)
+        
+        df_readin.time = parse_string_to_date.(string.(df_readin.time), df_readin.date_format[1], Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+
+        # Now based on Date object we can created a column "period" that will translate each date to an associated integer period
+        dates_vector  = sort(unique(df_readin.time))
+        date_dict = Dict(zip(dates_vector, 1:length(dates_vector)))
+        df_readin.period = [date_dict[date] for date in df_readin.time]
+
+        # Likewise we define the treatment_time as a period as well
+        df_readin[df_readin.treatment_time .!= "control", "treatment_time"] = parse_string_to_date.(string.(df_readin[df_readin.treatment_time .!= "control",:].treatment_time), df_readin.date_format[1], Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+        df_readin.treatment_period = [x isa Date ? date_dict[x] : missing for x in df_readin.treatment_time]
+    end 
+    return df_readin
+end
+
 function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates = false)
     X = convert(Matrix{Float64}, X)
     cov_beta_hat = zeros(size(X, 2), size(X, 2))
@@ -1193,7 +855,7 @@ function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates =
 
 end 
 
-function save_as_csv(filename, data, datatype)
+function save_as_csv(filename, data, datatype::String, printmessage::Bool = true)
 
     # Get the absolute filepath i.e. the save location for the csv
     filepath = abspath(filename)
@@ -1216,21 +878,38 @@ function save_as_csv(filename, data, datatype)
         error("Specify if you are saving an 'array_of_arrays' or a 'df'.")
     end 
 
-    println("$filename.csv saved to")
-    formatted_path = replace(filepath, "\\" => "\\\\")
-    println(formatted_path)
+    # if printmessage == true then print filepath
+    println("$filename saved to")
+    if printmessage == true
+        formatted_path = replace(filepath, "\\" => "\\\\")
+        println(formatted_path)
+    end 
+    
 
     return filepath
 end 
 
-function parse_string_to_date(date, date_format, possible_formats = false, month_map = false)
+function parse_string_to_date(date, date_format::String, possible_formats = false, month_map = false)
     
+    # Ensure that a dictionary relating month abbrevations to integers from 1 to 12.
+    # Likewise ensure that an array of possible date formats is passed. 
+    # This function is always called from create_diff_df, run_stage_two, or run_stage_three so this shouldn't be an issue as the 
+    # dictionary and array will be specified within those functions.
     if possible_formats == false || month_map == false
         error("Please pass a dictionary such as Dict(\"jan\" => \"01\", \"feb\" => \"02\", \"mar\" => \"03\", \"apr\" => \"04\", \"may\" => \"05\", \"jun\" => \"06\", \"jul\" => \"07\", \"aug\" => \"08\", \"sep\" => \"09\", \"oct\" => \"10\", \"nov\" => \"11\", \"dec\" => \"12\") as well as the possible formats [\"yyyy/mm/dd\", \"yyyy-mm-dd\", \"yyyymmdd\", \"yyyy/dd/mm\", \"yyyy-dd-mm\", \"yyyyddmm\", \"dd/mm/yyyy\", \"dd-mm-yyyy\", \"ddmmyyyy\", \"mm/dd/yyyy\", \"mm-dd-yyyy\", \"mmddyyyy\",
         \"mm/yyyy\", \"mm-yyyy\", \"mmyyyy\", \"yyyy\", \"ddmonyyyy\", \"yyyym00\"]")
     end
     
+    # First check if the date is a lack-of-a-date and if so simply return "control"
+    if date in ["control", "n/a", "never", "not treated", "not_treated", ""]
+        output = "control"
+        return output
+    end 
+
+    # Convert strings to date objects depending on the specified date_format
     if date_format == "ddmonyyyy"
+        # The first case is dealing with formats such as 25dec1991 
+        # which is what dates sometimes look like when converting to strings in Stata
         date = lowercase(date)
         day = date[1:2]
         month_str = date[3:5]
@@ -1238,11 +917,13 @@ function parse_string_to_date(date, date_format, possible_formats = false, month
         month = month_map[month_str]
         output = Date("$day/$month/$year", "dd/mm/yyyy")
     elseif date_format == "yyyym00"
+        # This is for another common Stata formatting of dates when converted to strings
         date = lowercase(date)
         info = split(date, "m")        
         output = Date("$(info[2])/$(info[1])", "mm/yyyy")
-    elseif date_format in possible_formats        
-        output = Date(date, date_format)        
+    elseif date_format in possible_formats  
+        # Other formats are handled natively by Dates      
+        output = Date(date, date_format)
     else
         error("Please specify a date_format listed here: $possible_formats. Format 'ddmonyyyy' should look like '25dec2020' and format yyyym00 should look like '2020m12'.")
     end 
@@ -1250,7 +931,7 @@ function parse_string_to_date(date, date_format, possible_formats = false, month
     return output 
 end
 
-function parse_date_to_string(date, date_format)
+function parse_date_to_string(date, date_format::String)
     
     # This function is basically a wrapper for parse_date_to_string()
     # except this adds a bit more functionality so that it can 
