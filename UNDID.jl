@@ -11,7 +11,7 @@ using Dates
 export create_init_csv, create_diff_df, run_stage_one, # Stage 1 Functions
 fill_diff_df, create_trends_df,  run_stage_two, # Stage 2 Functions
 combine_diff_data, combine_trends_data, calculate_agg_att_df, run_stage_three, # Stage 3 Functions
-read_csv_data, compute_covariance_matrix, save_as_csv, parse_string_to_date, parse_date_to_string, parse_freq # Misc Functions
+read_csv_data, compute_covariance_matrix, save_as_csv, parse_string_to_date, parse_date_to_string, parse_freq, match_dates, combine_fuzzy_data # Misc Functions
 
 ### Stage 1 Functions ###
 function create_init_csv(names=[], start_times=[], end_times=[], treatment_times=[]; covariates = false, printmessage::Bool = false)
@@ -50,7 +50,7 @@ function create_init_csv(names=[], start_times=[], end_times=[], treatment_times
     return filepath
 end 
 
-function create_diff_df(csv::String; covariates = false, date_format = false, freq = false, freq_multiplier = false)
+function create_diff_df(csv::AbstractString; covariates = false, date_format = false, freq = false, freq_multiplier = false, confine_matching::Bool = true)
 
     # This is for flexible date handling for the parse_string_to_date function
     possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
@@ -108,7 +108,7 @@ function create_diff_df(csv::String; covariates = false, date_format = false, fr
 
     # Setup for staggered adoption
     if length(unique(df.treatment_time)) > 2
-
+        
         # Set up the skeleton of the full empty_diff_df
         header = ["silo_name", "gvar", "treat", "diff_times", "(g;t)"]
         column_types = [Any, String, Int, Tuple, Tuple]
@@ -116,7 +116,7 @@ function create_diff_df(csv::String; covariates = false, date_format = false, fr
         
         # Produces the appropriate year combinations that need to be calculated based on the init.csv
         for group in df[:, "silo_name"]
-        
+            
             times = df[df[!, "silo_name"] .== group, "start_time"][1]:freq:df[df[!, "silo_name"] .== group, "end_time"][1]       
             if df[df[!, "silo_name"] .== group, "treatment_time"][1] !== "control"
                 # These are the years that matter for treated groups                
@@ -148,19 +148,24 @@ function create_diff_df(csv::String; covariates = false, date_format = false, fr
     elseif length(unique(df.treatment_time)) <= 2
 
         # Set up the skeleton of the full empty_diff_df
-        header = ["silo_name", "treat", "common_treatment_time"]
-        column_types = [Any, Int, String]
+        header = ["silo_name", "treat", "common_treatment_time", "start_time", "end_time"]
+        column_types = [Any, Int, String, Date, Date]
         diff_df = DataFrame([Symbol(header[i]) => Vector{column_types[i]}() for i in 1:length(header)])
         common_treatment_time = parse_date_to_string(df[df[!, "treatment_time"] .!== 0, "treatment_time"][1], date_format)
 
         for silo_name in unique(df.silo_name)
             if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== "control"
                 treat = 1
+                start_time = df[df[!, "silo_name"] .== silo_name, "start_time"][1]
+                end_time = df[df[!, "silo_name"] .== silo_name, "end_time"][1]
             elseif df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] == "control"
                 treat = 0
+                start_time = df[df[!, "silo_name"] .== silo_name, "start_time"][1]
+                end_time = df[df[!, "silo_name"] .== silo_name, "end_time"][1]
             end
-            push!(diff_df, [silo_name, treat, common_treatment_time])
+            push!(diff_df, [silo_name, treat, common_treatment_time, start_time, end_time])
         end        
+        
     end
 
     # Create the empty columns for the diff_esimates and diff_standard_errors
@@ -189,7 +194,12 @@ function create_diff_df(csv::String; covariates = false, date_format = false, fr
     # Note the formatting of the date related information
     diff_df.date_format = Vector{Any}(fill(date_format, nrow(diff_df)))    
     diff_df.freq = Vector{Any}(fill(freq, nrow(diff_df))) 
-    
+
+    # And if confine_matching == false then enable fuzzy matching of dates
+    if confine_matching == false 
+        diff_df.fuzzy_matching = Vector{String}(fill("fuzzy", nrow(diff_df))) 
+    end
+
     # Finally, this if loop adds the necessary rows needed to carry out the RI inference later
     if "gvar" in DataFrames.names(diff_df) && length(unique(diff_df.gvar)) == 2
         diff_df.RI_inference = fill(0, nrow(diff_df))
@@ -217,23 +227,28 @@ function create_diff_df(csv::String; covariates = false, date_format = false, fr
     
 end 
 
-function run_stage_one(names, start_times, end_times, treatment_times; covariates = false, date_format = false, freq = false, freq_multiplier = false)
+function run_stage_one(names, start_times, end_times, treatment_times; covariates = false, date_format = false, freq = false, freq_multiplier = false, confine_matching::Bool = true)
     csv = create_init_csv(names, start_times, end_times, treatment_times, printmessage = true)
-    return create_diff_df(csv, covariates = covariates, date_format = date_format, freq = freq, freq_multiplier = freq_multiplier)
+    return create_diff_df(csv, covariates = covariates, date_format = date_format, freq = freq, freq_multiplier = freq_multiplier, confine_matching = confine_matching)
 end
 
 ### Stage 2 Functions ### 
-
-function fill_diff_df(silo_name::String, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false)
+function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false)
        
     empty_diff_df_date_format = empty_diff_df.date_format[1]
+    
+
     # Compute diff (gamma) estimates and standard errors in the case of common treatment times across silos
     if "common_treatment_time" in DataFrames.names(empty_diff_df)
         if treatment_time == false
             error("Please specify a common treatment time")
         end
 
+        start_date = Date(empty_diff_df[empty_diff_df.silo_name .== silo_name, "start_time"][1], "yyyy-mm-dd")
+        end_date = Date(empty_diff_df[empty_diff_df.silo_name .== silo_name, "end_time"][1], "yyyy-mm-dd")
+        
         # Use treatment time to construct dummy varaible indicating obs after treatment time
+        silo_data = silo_data[(silo_data.time .>= start_date .&& silo_data.time .<= end_date),:]
         silo_data_copy = copy(silo_data)
         silo_data_copy.time = ifelse.(silo_data_copy.time .>= treatment_time, 1, 0)
 
@@ -285,6 +300,12 @@ function fill_diff_df(silo_name::String, empty_diff_df::DataFrame, silo_data::Da
         # Compute the local silo regression for each relevant year
         for diff_combo in empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name,:].diff_times
             
+            # Check if either diff_combo[1] or diff_combo[2] is not found in the "time" column of silo_data
+            if !(diff_combo[1] in silo_data[!, "time"]) || !(diff_combo[2] in silo_data[!, "time"])
+                continue  # Skip to the next diff_combo if either date is not found
+            end
+
+
             # Filters the silo down to the relevant year combinations and replaces the values with 1 (post) and 0 (pre)
             silo_subset = silo_data[(silo_data[!, "time"] .== diff_combo[1] .|| silo_data[!, "time"] .== diff_combo[2]),:]
             silo_subset.time = replace(silo_subset.time, diff_combo[1] => 1, diff_combo[2] => 0)
@@ -344,21 +365,23 @@ function fill_diff_df(silo_name::String, empty_diff_df::DataFrame, silo_data::Da
     return empty_diff_df        
 end 
 
-function create_trends_df(silo_name::String, silo_data::DataFrame, freq::Date; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::String)    
+function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::AbstractString)    
 
     # Define column headers
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates", "date_format", "freq"]
     trends_df = DataFrame(Symbol.(header) .=> [[] for column in header])
     
+
     # Push means and time to data
     if covariates == ["none"]
-        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])
+        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"]+freq)
             push!(trends_df, [silo_name, string(treatment_time), parse_date_to_string(x, date_format), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), "n/a", ["none"], string(date_format), string(freq)])
         end
     else        
-        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])            
+        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"]+freq)            
             
             silo_subset = silo_data[silo_data[!, "time"] .== x,:]
+            
 
             X = Matrix(silo_subset[:, covariates])
             Y = convert(Vector{Float64},silo_subset.outcome)
@@ -376,7 +399,7 @@ function create_trends_df(silo_name::String, silo_data::DataFrame, freq::Date; c
     return trends_df
 end
 
-function run_stage_two(filepath_to_empty_diff_df::String, silo_name::String, silo_data::DataFrame, time_column::String, outcome_column::String, date_format_local::String; renaming_dictionary = false)
+function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::AbstractString, silo_data::DataFrame, time_column::AbstractString, outcome_column::AbstractString, date_format_local::AbstractString; renaming_dictionary = false)
     
     # Given a filepath to the empty_diff_df, the name of the local silo, and 
     # a dataframe of the local silo data, runs all the necessary Stage 2 functions
@@ -423,7 +446,6 @@ function run_stage_two(filepath_to_empty_diff_df::String, silo_name::String, sil
     # Rename the time and treatment columns appropriately
     rename!(silo_data, time_column => "time")
     rename!(silo_data, outcome_column => "outcome")
-
     
 
     # This is for flexible date handling for the parse_string_to_date function
@@ -435,9 +457,7 @@ function run_stage_two(filepath_to_empty_diff_df::String, silo_name::String, sil
     # Convert some string date information into Date type objects
     if "diff_times" in DataFrames.names(empty_diff_df)      
         treatment_time = false
-    end 
-
-    
+    end     
     if "common_treatment_time" in DataFrames.names(empty_diff_df)
         treatment_time = parse_string_to_date(string(empty_diff_df.common_treatment_time[1]), empty_diff_df.date_format[1], possible_formats_UNDID, month_map_UNDID)
     end
@@ -450,9 +470,33 @@ function run_stage_two(filepath_to_empty_diff_df::String, silo_name::String, sil
     elseif !(typeof(silo_data.time[1]) <: String)
         error("Ensure your time column contains string values.")
     end
-
     silo_data.time = parse_string_to_date.(lowercase.(string.(silo_data.time)), date_format_local, Ref(possible_formats_UNDID), Ref(month_map_UNDID))
     
+    # Grab frequency of dates
+    freq = parse_freq(string(empty_diff_df.freq[1]))
+
+    # Go through dates matching procedure if necessary
+    if "diff_times" in DataFrames.names(empty_diff_df)
+        empty_diff_dates = unique([x for x in empty_diff_df.diff_times for x in x])
+        silo_diff_times = unique(silo_data.time)
+        silo_unmatched_dates = [d for d in silo_diff_times if d ∉ empty_diff_dates]
+        gvar = empty_diff_df[empty_diff_df.treat .!== "RI", "gvar"][1]
+        if empty_diff_df[empty_diff_df.treat .!== "RI", "treat"][1] == 1
+            ever_treated = true
+        else
+            ever_treated = false
+        end
+        if "fuzzy_matching" in DataFrames.names(empty_diff_df)
+            confine_matching = false
+        else
+            confine_matching = true
+        end 
+        if length(silo_unmatched_dates) > 0 
+            date_map = match_dates(empty_diff_dates, silo_unmatched_dates, gvar, silo_name, ever_treated, freq, confine_matching = confine_matching)
+            silo_data.time = get.(Ref(date_map), silo_data.time, silo_data.time)
+        end 
+    end
+
     fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time)    
 
     treated_or_not = empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "treat"][1]
@@ -466,14 +510,12 @@ function run_stage_two(filepath_to_empty_diff_df::String, silo_name::String, sil
         treatment_time = "control"
     end 
     
-    freq = parse_freq(string(empty_diff_df.freq[1]))
-
     create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format)
 
 end 
 
 ### Stage 3 Functions ###
-function combine_diff_data(dir_path::String; save_csv::Bool = false)
+function combine_diff_data(dir_path::AbstractString; save_csv::Bool = false, interpolation = false)
     
     # Collects all the filled_diff_df_... csv files
     files = readdir(dir_path)
@@ -484,6 +526,89 @@ function combine_diff_data(dir_path::String; save_csv::Bool = false)
     for i in 2:length(matching_files)
         data = vcat(data, read_csv_data("$dir_path\\$(matching_files[i])"))
     end 
+
+    # This block performs linear interpolation/extrapolation for diff_estimate if interpolation is set to true
+    if any(==("missing"), data.diff_estimate)
+        indices = findall(==( "missing"), data.diff_estimate)
+        println("Missing diff_estimate for rows: $indices")
+        if interpolation == false
+            println("Consider setting interpolation = \"linear_function\".")
+        elseif interpolation == "linear_function"
+            data.local_period = Vector{Any}(fill("missing", nrow(data)))
+            for index in indices
+                silo = data[index,:].silo_name
+                gvar = data[index,:].gvar
+                gt = data[index,"(g;t)"]
+                println("Using a linear function to fill missing values of diff_estimate for silo: $silo (g,t): $gt")
+                periods = sort(unique([x for x in data[(data.silo_name .== silo) .&& (data.gvar .== gvar),"(g;t)"] for x in x]))
+                for i in 1:length(periods)
+                    data[(data.silo_name .== silo) .&& (data.gvar .== gvar) .&& ((getindex.(data."(g;t)", 2)) .== periods[i]), "local_period"] .= i
+                end 
+                temp_df = data[(data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate .!= "missing"),:]
+                temp_df_missing = data[(data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate .== "missing"),:]
+                if nrow(temp_df) == 0
+                    error("Silo: $silo for gvar: $gvar has no non-missing entries, unable to perform linear interpolation or extrapolation.")
+                elseif nrow(temp_df) == 1
+                    value = temp_df.diff_estimate[1]
+                    indices = findall((data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate .== "missing"))
+                    data.diff_estimate[indices] .= value
+                else                
+                    Y = convert(Vector{Float64}, temp_df.diff_estimate)
+                    X = convert(Matrix{Float64}, hcat(fill(1, nrow(temp_df)), temp_df.local_period))
+                    beta_hat = X \ Y
+                    interpolations = convert(Matrix{Float64}, hcat(fill(1, length(temp_df_missing.local_period)), temp_df_missing.local_period)) * beta_hat
+                    indices = findall((data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate .== "missing"))
+                    data.diff_estimate[indices] .= interpolations
+                end
+            end 
+        else
+            error("Set interpolation to false to \"linear_function\".")
+        end 
+    end
+
+    # This block performs linear interpolation/extrapolation for diff_estimate_covariates if interpolation is set to true
+    if nrow(data[data.diff_estimate_covariates .!= "missing",:]) > 0
+        indices = findall(==( "missing"), data.diff_estimate_covariates)
+        if length(indices) > 0 
+            println("Missing diff_estimate_covariates for rows: $indices")
+            if interpolation == false
+                println("Consider setting interpolation = \"linear_function\".")
+            elseif interpolation == "linear_function"
+                data.local_period = Vector{Any}(fill("missing", nrow(data)))
+                for index in indices
+                    silo = data[index,:].silo_name
+                    gvar = data[index,:].gvar
+                    gt = data[index,"(g;t)"]
+                    println("Using a linear function to fill missing values of diff_estimate_covariates for silo: $silo (g,t): $gt")
+                    periods = sort(unique([x for x in data[(data.silo_name .== silo) .&& (data.gvar .== gvar),"(g;t)"] for x in x]))
+                    for i in 1:length(periods)
+                        data[(data.silo_name .== silo) .&& (data.gvar .== gvar) .&& ((getindex.(data."(g;t)", 2)) .== periods[i]), "local_period"] .= i
+                    end 
+                    temp_df = data[(data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate_covariates .!= "missing"),:]
+                    temp_df_missing = data[(data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate_covariates .== "missing"),:]
+
+                    if nrow(temp_df) == 0
+                        error("Silo: $silo for gvar: $gvar has no non-missing entries, unable to perform linear interpolation or extrapolation.")
+                    elseif nrow(temp_df) == 1
+                        value = temp_df.diff_estimate_covariates[1]
+                        indices = findall((data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate_covariates .== "missing"))
+                        data.diff_estimate_covariates[indices] .= value
+                    else                
+                        Y = convert(Vector{Float64}, temp_df.diff_estimate_covariates)
+                        X = convert(Matrix{Float64}, hcat(fill(1, nrow(temp_df)), temp_df.local_period))
+                        beta_hat = X \ Y
+                        interpolations = convert(Matrix{Float64}, hcat(fill(1, length(temp_df_missing.local_period)), temp_df_missing.local_period)) * beta_hat
+                        indices = findall((data.silo_name .== silo) .&& (data.gvar .== gvar) .&& (data.diff_estimate_covariates .== "missing"))
+                        data.diff_estimate_covariates[indices] .= interpolations
+                    end
+                end 
+             
+            else
+                error("Set interpolation to false to \"linear_function\".")
+            end 
+        end 
+    
+    end
 
     # Save as csv if save_csv == true
     if save_csv == true
@@ -506,7 +631,7 @@ function combine_diff_data(dir_path::String; save_csv::Bool = false)
     return data
 end
 
-function combine_trends_data(dir_path::String; save_csv::Bool = false)
+function combine_trends_data(dir_path::AbstractString; save_csv::Bool = false)
     
     # Collects all the trends_data_... csv files
     files = readdir(dir_path)
@@ -517,6 +642,10 @@ function combine_trends_data(dir_path::String; save_csv::Bool = false)
     for i in 2:length(matching_files)
         data = vcat(data, read_csv_data("$dir_path\\$(matching_files[i])"))
     end 
+
+    if any(isnan, data.mean_outcome)
+        data= filter(row -> !isnan(row.mean_outcome), data)
+    end
 
     # Save as csv if save_csv == true
     if save_csv == true
@@ -534,9 +663,9 @@ function combine_trends_data(dir_path::String; save_csv::Bool = false)
 
 end 
 
-function run_stage_three(dir_path::String; agg::String = "silo", covariates::Bool = false, save_all_csvs::Bool = false)
+function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, interpolation = false)
 
-    combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs) 
+    combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs, interpolation = interpolation) 
     combined_trends_data = combine_trends_data(dir_path, save_csv = save_all_csvs)
 
     # Generate all the necessary matrices to do the randomization inference
@@ -608,7 +737,7 @@ function run_stage_three(dir_path::String; agg::String = "silo", covariates::Boo
     return calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs)   
 end
 
-function calculate_agg_att_df(combined_diff_data::DataFrame; agg::String = "silo", covariates::Bool = false, save_all_csvs::Bool = false, printinfo::Bool = true)
+function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, printinfo::Bool = true)
 
     combined_diff_data.treat = convert(Vector{Float64}, combined_diff_data.treat)
     if covariates == false
@@ -780,7 +909,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::String = "silo
 end 
 
 ### Misc Functions ###
-function read_csv_data(filepath_to_csv_data::String)
+function read_csv_data(filepath_to_csv_data::AbstractString)
 
     # This is for flexible date handling for the parse_string_to_date function
     possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
@@ -830,10 +959,11 @@ end
 function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates = false)
     X = convert(Matrix{Float64}, X)
     cov_beta_hat = zeros(size(X, 2), size(X, 2))
-    try
+
+    try      
         cov_beta_hat = inv(X' * X) * X' * sigma_sq * X * inv(X' * X)        
     catch ex 
-        if isa(ex, SingularException)
+        if (isa(ex, SingularException)) || (isa(ex, LAPACKException)) 
             det_Gram = det(X' * X)
             if diff_times !== false
                 if covariates != false
@@ -844,6 +974,7 @@ function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates =
             else 
                 println("Warning!! Gram matrix (X' * X) is singular (det = $det_Gram), using pseudoinverse instead.")
             end 
+            
             cov_beta_hat = pinv(X' * X) * X' * sigma_sq * X * pinv(X' * X)
         else
             println("Unexpected error occurred:", ex)
@@ -855,7 +986,7 @@ function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates =
 
 end 
 
-function save_as_csv(filename, data, datatype::String, printmessage::Bool = true)
+function save_as_csv(filename, data, datatype::AbstractString, printmessage::Bool = true)
 
     # Get the absolute filepath i.e. the save location for the csv
     filepath = abspath(filename)
@@ -889,7 +1020,7 @@ function save_as_csv(filename, data, datatype::String, printmessage::Bool = true
     return filepath
 end 
 
-function parse_string_to_date(date, date_format::String, possible_formats = false, month_map = false)
+function parse_string_to_date(date, date_format::AbstractString, possible_formats = false, month_map = false)
     
     # Ensure that a dictionary relating month abbrevations to integers from 1 to 12.
     # Likewise ensure that an array of possible date formats is passed. 
@@ -931,7 +1062,7 @@ function parse_string_to_date(date, date_format::String, possible_formats = fals
     return output 
 end
 
-function parse_date_to_string(date, date_format::String)
+function parse_date_to_string(date, date_format::AbstractString)
     
     # This function is basically a wrapper for parse_date_to_string()
     # except this adds a bit more functionality so that it can 
@@ -953,7 +1084,7 @@ function parse_date_to_string(date, date_format::String)
     end 
 end
 
-function parse_freq(period_str::String)
+function parse_freq(period_str::AbstractString)
     parts = split(period_str)
     value = parse(Int, parts[1])
     period_type = parts[2]
@@ -970,5 +1101,111 @@ function parse_freq(period_str::String)
         throw(ArgumentError("Unsupported period type: $period_type, try day(s), week(s), month(s), or year(s)."))
     end
 end
+
+function match_dates(empty_diff_dates::Vector{Date}, silo_unmatched_dates::Vector{Date}, gvar::Date, silo_name, ever_treated::Bool, freq; confine_matching::Bool = true)
+    
+    # Initialize empty dictionary
+    date_dict = Dict{Date, Date}()
+    
+    # First ensure that there are enough dates to match to the silo_unmatched_dates
+    min_diff_date = minimum(empty_diff_dates)
+    max_diff_date = maximum(empty_diff_dates)
+    backward_dates = Date[]
+    date = min_diff_date - freq
+    while date >= minimum(silo_unmatched_dates) - freq
+        push!(backward_dates, date)
+        date -= freq
+    end
+    forward_dates = Date[]
+    date = max_diff_date + freq
+    while date <= maximum(silo_unmatched_dates) + freq
+        push!(forward_dates, date)
+        date += freq
+    end
+    empty_diff_dates = sort(vcat(backward_dates, empty_diff_dates, forward_dates))
+
+    # If confine matching is true then any date in silo_date gets matched to the most recently passed date in empty_diff_dates
+    if confine_matching == true
+        println("Matching local silo dates to the most recently passed date in empty_diff_df.")
+        for target in silo_unmatched_dates
+            if target > minimum(empty_diff_dates)
+                date_dict[target] = maximum([d for d in empty_diff_dates if d < target])
+            end
+        end 
+        return date_dict
+    end 
+
+    println("Fuzzy matching dates!")
+    # The first two if statements ensure that we are only matching one date prior the minimum date 
+    # in the empty_diff_dates and only one date post the maximum date in the empty_diff_dates.
+    # Otherwise, every date in silo_unmatched_dates prior to the minimum date in empty_diff_dates would be matched to that minimum date.
+    if maximum(silo_unmatched_dates) > maximum(empty_diff_dates)
+        upper_bound = minimum([d for d in silo_unmatched_dates if d > maximum(empty_diff_dates)])
+        filter!(d -> d <= upper_bound, silo_unmatched_dates)
+    end
+    
+    if minimum(silo_unmatched_dates) < minimum(empty_diff_dates)
+        lower_bound = maximum([d for d in silo_unmatched_dates if d < minimum(empty_diff_dates)])
+        filter!(d -> d >= lower_bound, silo_unmatched_dates)
+    end 
+
+    for target in silo_unmatched_dates
+        # Determine the valid dates based on gvar relative to the target date
+        # Of course, this only matters if the silo is ever treated. Otherwise we don't care about it crossing the untreated/treated
+        # time barrier, as it would be always be untreated
+        if ever_treated == true
+            if gvar > target
+                valid_dates = filter(d -> d < gvar, empty_diff_dates) # Only allow dates up to 1 day behind gvar and not after gvar
+            else
+                valid_dates = filter(d -> d >= gvar, empty_diff_dates)  # Only allow dates that are no earlier than gvar
+            end
+        else
+            valid_dates = empty_diff_dates
+        end
+        # Calculate absolute differences between each date and target date
+        differences = abs.(valid_dates .- target)
+
+        # Grab index of the smallest difference
+        closest_index = argmin(differences)
+
+        # Insert into dictionary
+        date_dict[target] = valid_dates[closest_index]
+    end 
+
+    # This block is to keep track of which dates got fuzzy matched in which silos
+    original_dates = parse_date_to_string.(keys(date_dict), "dd/mm/yyyy")
+    matched_to_dates = parse_date_to_string.(values(date_dict), "dd/mm/yyyy")
+    df = DataFrame(silo_name = fill(silo_name, length(date_dict)), original_date =  original_dates, matched_to = matched_to_dates)
+    save_as_csv("fuzzy_dates_$(silo_name).csv", df ,"df", true)
+    
+    return date_dict
+end
+
+function combine_fuzzy_data(dir_path::String; save_csv::Bool = false)
+    # Collects all the filled_diff_df_... csv files
+    files = readdir(dir_path)
+    matching_files = filter(file -> startswith(file, "fuzzy_dates_") && endswith(file, ".csv"), files)
+
+    # Uses the read_csv_data function to read in the csv's and appends them all together
+    data = read_csv_data("$dir_path\\$(matching_files[1])")
+    for i in 2:length(matching_files)
+        data = vcat(data, read_csv_data("$dir_path\\$(matching_files[i])"))
+    end 
+
+    if save_csv == true
+        save_as_csv("combined_fuzzy_dates.csv", data, "df")
+    end
+
+    # This is for flexible date handling for the parse_string_to_date function
+    possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
+    "mm/yyyy", "mm-yyyy", "mmyyyy", "yyyy", "ddmonyyyy", "yyyym00"]
+    month_map_UNDID = Dict("jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10",
+    "nov" => "11", "dec" => "12")
+
+    data.original_date = parse_string_to_date.(data.original_date, "dd/mm/yyyy", Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+    data.matched_to = parse_string_to_date.(data.matched_to, "dd/mm/yyyy", Ref(possible_formats_UNDID), Ref(month_map_UNDID))
+
+    return data
+end 
 
 end 
