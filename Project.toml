@@ -1,6 +1,6 @@
 name = "Undid"
 uuid = "b4918ae7-7c73-4176-80be-8405760cf2ee"  
-version = "0.1.0"
+version = "0.1.1"
 
 [deps]
 DataFrames = "a93c6f00-e57b-5684-b7b6-d8193f3e46c0"
