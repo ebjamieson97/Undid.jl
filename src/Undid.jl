@@ -1,6 +1,5 @@
 module Undid
 
-# Declare required packages. 
 # All of these are part of base Julia with the exception of DataFrames
 using Statistics
 using LinearAlgebra
