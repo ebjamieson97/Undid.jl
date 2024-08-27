@@ -225,7 +225,7 @@ function create_diff_df(csv::AbstractString; covariates = false, date_format = f
         save_as_csv("empty_diff_df.csv", diff_df, "df")
         return diff_df 
     elseif return_filepath == true
-        filepath = save_as_csv("empty_diff_df.csv", diff_df, "df")
+        filepath = save_as_csv("empty_diff_df.csv", diff_df, "df", false)
         return filepath
     end
     
