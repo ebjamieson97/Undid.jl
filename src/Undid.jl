@@ -1132,8 +1132,8 @@ function match_dates(empty_diff_dates::Vector{Date}, silo_unmatched_dates::Vecto
     if confine_matching == true
         println("Matching local silo dates to the most recently passed date in empty_diff_df.")
         for target in silo_unmatched_dates
-            if target > minimum(empty_diff_dates)
-                date_dict[target] = maximum([d for d in empty_diff_dates if d < target])
+            if target >= minimum(empty_diff_dates)
+                date_dict[target] = maximum([d for d in empty_diff_dates if d <= target])
             end
         end 
         return date_dict
