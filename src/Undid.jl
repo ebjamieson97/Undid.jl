@@ -383,7 +383,7 @@ function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq;
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates", "date_format", "freq"]
     trends_df = DataFrame(Symbol.(header) .=> [[] for column in header])
     
-    println(sort(unique(silo_data.time)))
+
     # Push means and time to data
     if covariates == ["none"]
         for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])
