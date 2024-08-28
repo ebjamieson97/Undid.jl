@@ -375,14 +375,14 @@ function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq;
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates", "date_format", "freq"]
     trends_df = DataFrame(Symbol.(header) .=> [[] for column in header])
     
-
+    println(sort(unique(silo_data.time)))
     # Push means and time to data
     if covariates == ["none"]
-        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"]+freq)
+        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])
             push!(trends_df, [silo_name, string(treatment_time), parse_date_to_string(x, date_format), string(mean(silo_data[silo_data[!, "time"] .== x, "outcome"])), "n/a", ["none"], string(date_format), string(freq)])
         end
     else        
-        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"]+freq)            
+        for x in minimum(silo_data[!,"time"]):freq:maximum(silo_data[!,"time"])            
             
             silo_subset = silo_data[silo_data[!, "time"] .== x,:]
             
