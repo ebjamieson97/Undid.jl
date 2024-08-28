@@ -237,7 +237,7 @@ function run_stage_one(names, start_times, end_times, treatment_times; covariate
 end
 
 ### Stage 2 Functions ### 
-function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false)
+function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false, return_filepath::Bool = false)
        
     empty_diff_df_date_format = empty_diff_df.date_format[1]
     
@@ -364,12 +364,20 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
     # Save as csv and restructure covariates so that they are delimited by ; makes it easier to read back in from csv
     silo_name = string(silo_name)
     empty_diff_df.covariates = fill(join(empty_diff_df.covariates[1], ";"), nrow(empty_diff_df))
-    save_as_csv("filled_diff_df_$silo_name.csv", empty_diff_df, "df")     
+      
     
-    return empty_diff_df        
+    # Save as empty_diff_df.csv
+    if return_filepath == false
+        save_as_csv("filled_diff_df_$silo_name.csv", empty_diff_df, "df")
+        return empty_diff_df   
+    elseif return_filepath == true
+        filepath = save_as_csv("filled_diff_df_$silo_name.csv", empty_diff_df, "df", false)
+        return filepath
+    end
+       
 end 
 
-function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::AbstractString)    
+function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::AbstractString, return_filepath::Bool = false)    
 
     # Define column headers
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates", "date_format", "freq"]
@@ -399,11 +407,19 @@ function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq;
     end
     
     trends_df.covariates = fill(join(trends_df.covariates[1], ";"), nrow(trends_df))
-    save_as_csv("trends_data_$(silo_name).csv", trends_df, "df")       
-    return trends_df
+    
+    # Save as empty_diff_df.csv
+    if return_filepath == false
+        save_as_csv("trends_data_$(silo_name).csv", trends_df, "df")  
+        return trends_df  
+    elseif return_filepath == true
+        filepath = save_as_csv("trends_data_$(silo_name).csv", trends_df, "df", false)
+        return filepath
+    end
+
 end
 
-function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::AbstractString, silo_data::DataFrame, time_column::AbstractString, outcome_column::AbstractString, date_format_local::AbstractString; renaming_dictionary = false)
+function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::AbstractString, silo_data::DataFrame, time_column::AbstractString, outcome_column::AbstractString, date_format_local::AbstractString; renaming_dictionary = false, return_filepath::Bool = false)
     
     # Given a filepath to the empty_diff_df, the name of the local silo, and 
     # a dataframe of the local silo data, runs all the necessary Stage 2 functions
@@ -501,7 +517,11 @@ function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::Abs
         end 
     end
 
-    fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time)    
+    if return_filepath == false
+        fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time)
+    elseif return_filepath == true
+        filepath_diff_df = fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time, return_filepath = true)
+    end 
 
     treated_or_not = empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "treat"][1]
     if treated_or_not == 1
@@ -514,8 +534,15 @@ function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::Abs
         treatment_time = "control"
     end 
     
-    create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format)
+    if return_filepath == false
+        create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format)
+    elseif return_filepath == true
+        filepath_trends_df = create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format, return_filepath = true)
+    end 
 
+    if return_filepath == true
+        return filepath_diff_df, filepath_trends_df
+    end 
 end 
 
 ### Stage 3 Functions ###
