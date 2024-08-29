@@ -772,7 +772,7 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
             p_value_RI += Int(abs(ATT) >= abs(original_ATT))
         end 
         p_value_RI = p_value_RI/ length(RI_ATT)
-        results.p_value_RI = vcat(p_value_RI, fill(missing, nrow(results)-1))
+        results.p_value_RI = fill(p_value_RI, nrow(results))
         save_as_csv("UNDID_results.csv", results, "df", true)
         return results
     end 
@@ -882,7 +882,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             end
             ATT_silo = mean(silos_att)
             jackknife_SE = sqrt(sum((jackknives_silo .-ATT_silo).^2) / length(jackknives_silo))
-            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = silos_att, agg_ATT = vcat([ATT_silo], fill(missing, length(silos_att) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(silos_att) - 1)))          
+            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = silos_att, agg_ATT = fill(ATT_silo, length(silos_att)), jackknife_SE = fill(jackknife_SE, length(silos_att)))          
         elseif agg == "gt" || agg == "g"            
             ATT_vec = []
             gt_vec = []
@@ -903,7 +903,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 end
                 ATT_gt = mean(ATT_vec)
                 jackknife_SE = sqrt(sum((jackknives_gt .-ATT_gt).^2) / length(jackknives_gt))
-                results = DataFrame(gt = gt_vec, ATT_gt = ATT_vec, agg_ATT = vcat([ATT_gt], fill(missing, length(ATT_vec) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_vec) - 1)))
+                results = DataFrame(gt = gt_vec, ATT_gt = ATT_vec, agg_ATT = fill(ATT_gt, length(ATT_vec)), jackknife_SE = fill(jackknife_SE, length(ATT_vec)))
                 results.gt = [join((parse_date_to_string(date1, combined_diff_data.date_format[1]), parse_date_to_string(date2, combined_diff_data.date_format[1])), ";") for (date1, date2) in results[!, "gt"]]
             end 
             if agg == "g"                
@@ -947,7 +947,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 end
                 ATT_g = mean(ATT_by_gvar_weighted)
                 jackknife_SE = sqrt(sum((jackknives_g .-ATT_g).^2) / length(jackknives_g))
-                results = DataFrame(g = parse_date_to_string.(unique(ATT_gt_df.g), combined_diff_data.date_format[1]), ATT_g = ATT_by_gvar_weighted, agg_ATT = vcat([ATT_g], fill(missing, length(ATT_by_gvar_weighted) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_by_gvar_weighted) - 1)))
+                results = DataFrame(g = parse_date_to_string.(unique(ATT_gt_df.g), combined_diff_data.date_format[1]), ATT_g = ATT_by_gvar_weighted, agg_ATT = fill(ATT_g, length(ATT_by_gvar_weighted)), jackknife_SE = fill(jackknife_SE, length(ATT_by_gvar_weighted)))
             end
         end 
         return results
