@@ -773,6 +773,7 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
         end 
         p_value_RI = p_value_RI/ length(RI_ATT)
         results.p_value_RI = vcat(p_value_RI, fill(missing, nrow(results)-1))
+        save_as_csv("UNDID_results.csv", results, "df", true)
         return results
     end 
 
