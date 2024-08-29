@@ -776,9 +776,12 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
         return results
     end 
 
-    
-    return calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs)   
+    results = calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs) 
+    save_as_csv("UNDID_results.csv", results, "df", true)
+    return results  
 end
+
+
 
 function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, printinfo::Bool = true)
 
