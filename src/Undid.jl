@@ -237,10 +237,16 @@ function run_stage_one(names, start_times, end_times, treatment_times; covariate
 end
 
 ### Stage 2 Functions ### 
-function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false, return_filepath::Bool = false)
+function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false, return_filepath::Bool = false, consider_covariates::Bool = true)
        
     empty_diff_df_date_format = empty_diff_df.date_format[1]
-    
+
+    # Allows for the option of ignoring covariates, even if specified initially in stage one.
+    if consider_covariates == true
+        covariates = empty_diff_df.covariates[1]
+    elseif consider_covariates == false
+        covariates = ["none"]
+    end     
 
     # Compute diff (gamma) estimates and standard errors in the case of common treatment times across silos
     if "common_treatment_time" in DataFrames.names(empty_diff_df)
@@ -260,8 +266,10 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
         X = convert(Matrix{Float64},hcat(fill(1,nrow(silo_data_copy)), silo_data_copy.time))
         Y = convert(Vector{Float64},silo_data_copy.outcome)
 
+
+        
         # Tell the next for loop to calculate diff_estimate with covariates if cov_on == 2
-        if empty_diff_df.covariates[1][1] == "none"
+        if covariates == ["none"]
             cov_on = 0
         else 
             cov_on = 1
@@ -286,7 +294,7 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
 
             if cov_on == 1 && i == 1
                 try
-                    X = hcat(X, Matrix(silo_data[:, empty_diff_df.covariates[1]]))
+                    X = hcat(X, Matrix(silo_data[:, covariates]))
                 catch ex
                     if isa(ex, ArgumentError)
                         error("Please rename your covariates to align with the names used here: $(empty_diff_df.covariates[1])")
@@ -328,11 +336,11 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
             empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& (in.(diff_combo[2], empty_diff_df[!, "diff_times"])), "diff_var"] .= cov_beta_hat[2,2]
 
 
-            if (empty_diff_df[!, "covariates"][1][1] == "none") 
+            if (covariates == ["none"]) 
                 # do nothing
             else
                 # Perform regression with covariates
-                columns = Symbol.(empty_diff_df[!, "covariates"][1])
+                columns = Symbol.(covariates)
                 
                 try # Try appending columns and throw error message if column names are not correctly specified
                     X = hcat(X, Matrix(silo_subset[:, columns]))
@@ -377,12 +385,16 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
        
 end 
 
-function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::AbstractString, return_filepath::Bool = false)    
+function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::AbstractString, return_filepath::Bool = false, consider_covariates::Bool = true)    
 
     # Define column headers
     header = ["silo_name", "treatment_time", "time", "mean_outcome", "mean_outcome_residualized", "covariates", "date_format", "freq"]
     trends_df = DataFrame(Symbol.(header) .=> [[] for column in header])
     
+    # Allows for the option of ignoring covariates, even if specified initially in stage one.
+    if consider_covariates == false
+        covariates = ["none"]
+    end
 
     # Push means and time to data
     if covariates == ["none"]
@@ -419,7 +431,7 @@ function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq;
 
 end
 
-function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::AbstractString, silo_data::DataFrame, time_column::AbstractString, outcome_column::AbstractString, date_format_local::AbstractString; renaming_dictionary = false, return_filepath::Bool = false)
+function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::AbstractString, silo_data::DataFrame, time_column::AbstractString, outcome_column::AbstractString, date_format_local::AbstractString; renaming_dictionary = false, return_filepath::Bool = false, consider_covariates::Bool = true)
     
     # Given a filepath to the empty_diff_df, the name of the local silo, and 
     # a dataframe of the local silo data, runs all the necessary Stage 2 functions
@@ -518,9 +530,9 @@ function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::Abs
     end
 
     if return_filepath == false
-        fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time)
+        fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time, consider_covariates = consider_covariates)
     elseif return_filepath == true
-        filepath_diff_df = fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time, return_filepath = true)
+        filepath_diff_df = fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time, return_filepath = true, consider_covariates = consider_covariates)
     end 
 
     treated_or_not = empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "treat"][1]
@@ -535,9 +547,9 @@ function run_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::Abs
     end 
     
     if return_filepath == false
-        create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format)
+        create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format, consider_covariates = consider_covariates)
     elseif return_filepath == true
-        filepath_trends_df = create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format, return_filepath = true)
+        filepath_trends_df = create_trends_df(silo_name, silo_data, freq, covariates = covariates, treatment_time = treatment_time, date_format = empty_diff_df_date_format, return_filepath = true, consider_covariates = consider_covariates)
     end 
 
     if return_filepath == true
