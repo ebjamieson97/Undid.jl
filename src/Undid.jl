@@ -697,7 +697,7 @@ end
 function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, interpolation = false)
 
     combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs, interpolation = interpolation) 
-    combined_trends_data = combine_trends_data(dir_path, save_csv = save_all_csvs)
+    
 
     # Generate all the necessary matrices to do the randomization inference
     if "RI_inference" in DataFrames.names(combined_diff_data)
