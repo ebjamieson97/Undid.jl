@@ -1,5 +1,5 @@
 # Undid.jl
-Differences-in-differences for unpoolable data
+Differences-in-differences for unpoolable data.
 
 ## Installation 
 ```
