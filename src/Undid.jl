@@ -50,7 +50,7 @@ function create_init_csv(names=[], start_times=[], end_times=[], treatment_times
     return filepath
 end 
 
-function create_diff_df(csv::AbstractString; covariates = false, date_format = false, freq = false, freq_multiplier = false, confine_matching::Bool = true, return_filepath::Bool = false)
+function create_diff_df(csv::AbstractString; covariates = false, date_format = false, freq = false, freq_multiplier = false, confine_matching::Bool = true)
 
     # This is for flexible date handling for the parse_string_to_date function
     possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
@@ -220,14 +220,8 @@ function create_diff_df(csv::AbstractString; covariates = false, date_format = f
         end 
     end
 
-    # Save as empty_diff_df.csv
-    if return_filepath == false
-        save_as_csv("empty_diff_df.csv", diff_df, "df")
-        return diff_df 
-    elseif return_filepath == true
-        filepath = save_as_csv("empty_diff_df.csv", diff_df, "df", false)
-        return filepath
-    end
+    filepath = save_as_csv("empty_diff_df.csv", diff_df, "df", false)
+    return filepath, diff_df 
     
 end 
 
