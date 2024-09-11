@@ -200,12 +200,12 @@ function create_diff_df(csv::AbstractString; covariates = false, date_format = f
         diff_df.fuzzy_matching = Vector{String}(fill("fuzzy", nrow(diff_df))) 
     end
 
-    # Finally, this if loop adds the necessary rows needed to carry out the RI inference later
-    if "gvar" in DataFrames.names(diff_df) && length(unique(diff_df.gvar)) == 2
+    # Finally, this if loop adds the necessary rows needed to carry out the RI inference later for staggered adoption
+    if "gvar" in DataFrames.names(diff_df)
         diff_df.RI_inference = fill(0, nrow(diff_df))
         diff_df.treat = convert(Vector{Any}, diff_df.treat)
         for silo in unique(diff_df[diff_df.treat .== 1, "silo_name"])
-            diff_times_to_add = setdiff(unique(diff_df.diff_times),diff_df[diff_df.silo_name .== silo ,:].diff_times)
+            diff_times_to_add = setdiff(unique(diff_df.diff_times), diff_df[diff_df.silo_name .== silo ,:].diff_times)
             for time in diff_times_to_add
                 filtered_df = unique(filter(row -> row.diff_times == time, diff_df)[:, Not([:silo_name, :RI_inference, :treat])])
                 gvar = filtered_df.gvar[1]
@@ -704,7 +704,7 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
             df[!, Symbol("D_$(i)")] = circshift(df.D, i)
         end
 
-        # Create a dictionary of empty dataframes for each rotation in the circshift
+        # Create a dictionary of empty (just the headers) dataframes for each rotation in the circshift
         RI_matrices = Dict{Int, DataFrame}()
         for i in 1:nrow(df)
             empty_matrix = combined_diff_data[combined_diff_data.gvar .== false, :]  
@@ -753,7 +753,7 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
 
     results = calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs) 
     save_as_csv("UNDID_results.csv", results, "df", true)
-    return results  
+    return results 
 end
 
 
@@ -798,33 +798,31 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var_covariates)))
             end 
             results.SE = [SE]
-         
-        # Do randomization inference in two cases: 1 treated and >1 controls, >1 treated and 1 control 
-        elseif (sum(combined_diff_data.treat .== 0) == 1 && sum(combined_diff_data.treat .== 1) >= 2) || (sum(combined_diff_data.treat .== 0) >= 2 && sum(combined_diff_data.treat .== 1) == 1)
-            if sum(combined_diff_data.treat .== 0) == 1
-                unique_value = 0
-                non_unique = 1
-            elseif sum(combined_diff_data.treat .== 1) == 1
-                unique_value = 1
-                non_unique = 0
-            end
-            beta_r = []
-            for i in 1:nrow(combined_diff_data)
-                combined_diff_data.treat .= non_unique
-                combined_diff_data.treat[i] = unique_value
-            
-                beta = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
-                push!(beta_r, beta)
-            end
-        
-            p_value_RI = 0
-            for beta in beta_r 
-                p_value_RI += Int(abs(beta) >= abs(ATT))
-            end 
-            p_value_RI = p_value_RI/ length(beta_r)
-            results.p_value_RI = [p_value_RI]
         end
 
+
+        # Do randomization inference procedure
+        silos = combined_diff_data.silo_name
+        treat = combined_diff_data.treat
+        df = DataFrame(silo_name = silos, treat = treat)
+        for i in 1:nrow(df)
+            df[!, Symbol("treat_$(i)")] = circshift(df.treat, i)
+        end
+        RI_matrices = Dict{Int, DataFrame}()
+        for i in 1:nrow(df)
+            RI_matrix = copy(combined_diff_data)
+            RI_matrix[:,"treat"] = df[:, Symbol("treat_$i")]
+            RI_matrices[i] = RI_matrix
+        end
+        p_value_RI = 0
+        for i in 1:length(RI_matrices)
+            ATT_RI = (hcat(fill(1.0, length(RI_matrices[i].treat)), RI_matrices[i].treat) \ RI_matrices[i].y)[2]
+            p_value_RI += Int(abs(ATT_RI) >= abs(ATT))
+            println(Int(abs(ATT_RI) >= abs(ATT)))
+            println(ATT_RI)
+        end
+        p_value_RI = p_value_RI/ length(RI_matrices)
+        results.p_value_RI = [p_value_RI]
                 
         return results
     else
