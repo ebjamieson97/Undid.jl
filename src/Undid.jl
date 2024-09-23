@@ -151,7 +151,7 @@ function create_diff_df(csv::AbstractString; covariates = false, date_format = f
         header = ["silo_name", "treat", "common_treatment_time", "start_time", "end_time"]
         column_types = [Any, Int, String, Date, Date]
         diff_df = DataFrame([Symbol(header[i]) => Vector{column_types[i]}() for i in 1:length(header)])
-        common_treatment_time = parse_date_to_string(df[df[!, "treatment_time"] .!== 0, "treatment_time"][1], date_format)
+        common_treatment_time = parse_date_to_string(df[df[!, "treatment_time"] .!== "control", "treatment_time"][1], date_format)
 
         for silo_name in unique(df.silo_name)
             if df[df[!, "silo_name"] .== silo_name, "treatment_time"][1] !== "control"
@@ -1051,7 +1051,8 @@ function parse_string_to_date(date, date_format::AbstractString, possible_format
     end
     
     # First check if the date is a lack-of-a-date and if so simply return "control"
-    if date in ["control", "n/a", "never", "not treated", "not_treated", ""]
+    if date in ["control", "n/a", "never", "not treated", "not_treated", "", "Control", "CONTROL", "N/A", "NEVER", "NOT TREATED",
+        "not_treated", "NOT_TREATED", "missing", "nothing"]
         output = "control"
         return output
     end 
