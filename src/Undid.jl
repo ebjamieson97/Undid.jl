@@ -397,6 +397,7 @@ function create_trends_df(silo_name::AbstractString, silo_data::DataFrame, freq;
             
 
             X = Matrix(silo_subset[:, covariates])
+            X = convert(Matrix{Float64}, X) # Ensure matrix is of type Float64 as oppose to Any. Important for wrappers
             Y = convert(Vector{Float64},silo_subset.outcome)
            
             beta_hat = X\Y 
