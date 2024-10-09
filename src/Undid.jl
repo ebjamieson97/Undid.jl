@@ -781,7 +781,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
         println("Calcualting aggregate ATT with covariates set to $covariates.")
         ATT = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
         treatment_time = combined_diff_data.common_treatment_time[1]
-        results = DataFrame(treatment_time = treatment_time, ATT = ATT)
+        results = DataFrame(treatment_time = treatment_time, agg_ATT = ATT)
         # Compute jackknife SE if there are at least 2 controls and 2 treatment silos
         if sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) >= 2
             jackknives_common = []
