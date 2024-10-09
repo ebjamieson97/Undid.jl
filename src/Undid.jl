@@ -791,6 +791,8 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             end 
             jackknife_SE = sqrt(sum((jackknives_common .- ATT).^2) * ((length(jackknives_common) - 1)/length(jackknives_common)))
             results.jackknife_SE = [jackknife_SE]
+            results.num_silos = [length(jackknives_common)]
+            results.num_silos = Float64.(results.num_silos)
 
         elseif sum(combined_diff_data.treat .== 1) == 1 && sum(combined_diff_data.treat .== 0) == 1
             if covariates == false 
