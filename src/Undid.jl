@@ -166,7 +166,7 @@ function create_diff_df(csv::AbstractString; covariates = false, date_format = f
             push!(diff_df, [silo_name, treat, common_treatment_time, start_time, end_time])
         end
         if weights == "standard"
-            diff_df.weights = Vector{String}("standard", nrow(diff_df))
+            diff_df.weights = fill("standard", nrow(diff_df))
         else
             error("Please select a valid weighting method. Options include: \"standard\"")
         end 
@@ -256,8 +256,10 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
         silo_data_copy.time = ifelse.(silo_data_copy.time .>= treatment_time, 1, 0)
         
         # Calculate weight for silo and throw to empty_diff_df
-        weight = sum(silo_data_copy.time) / nrow(silo_data_copy)
-        empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "weights"] .= weight
+        if empty_diff_df.weights[1] == "standard"
+            weight = sum(silo_data_copy.time) / nrow(silo_data_copy)
+            empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "weights"] .= weight
+        end 
 
         # Construct X and Y for regression
         X = convert(Matrix{Float64},hcat(fill(1,nrow(silo_data_copy)), silo_data_copy.time))
@@ -673,7 +675,7 @@ function combine_trends_data(dir_path::AbstractString; save_csv::Bool = false)
 
 end 
 
-function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, interpolation = false)
+function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, interpolation = false, weights::Bool = true)
 
     combined_diff_data = combine_diff_data(dir_path, save_csv = save_all_csvs, interpolation = interpolation) 
     
@@ -724,13 +726,13 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
         end 
         
         # Calculate att by specified aggregation method 
-        results = calculate_agg_att_df(diff_matrix_no_RI; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs, printinfo = true)  
+        results = calculate_agg_att_df(diff_matrix_no_RI; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs, printinfo = true, weights = weights)  
 
         # Compute p-value based on randomization inference and add to results as a column
         original_ATT = results.agg_ATT[1]
         RI_ATT = []
         for i in 1:length(RI_matrices)
-            RI_ATT_single = calculate_agg_att_df(RI_matrices[i]; agg = agg, covariates = covariates, save_all_csvs = false, printinfo = false).agg_ATT[1]
+            RI_ATT_single = calculate_agg_att_df(RI_matrices[i], agg = agg, covariates = covariates, save_all_csvs = false, printinfo = false, weights = weights).agg_ATT[1]
             push!(RI_ATT, RI_ATT_single)
         end 
 
@@ -744,12 +746,12 @@ function run_stage_three(dir_path::AbstractString; agg::AbstractString = "silo",
         return results
     end 
 
-    results = calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs) 
+    results = calculate_agg_att_df(combined_diff_data; agg = agg, covariates = covariates, save_all_csvs = save_all_csvs, weights = weights) 
     save_as_csv("UNDID_results.csv", results, "df", true)
     return results 
 end
 
-function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, printinfo::Bool = true)
+function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString = "silo", covariates::Bool = false, save_all_csvs::Bool = false, printinfo::Bool = true, weights::Bool = true)
 
     combined_diff_data.treat = convert(Vector{Float64}, combined_diff_data.treat)
     if covariates == false
@@ -769,7 +771,19 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
 
     if "common_treatment_time" in DataFrames.names(combined_diff_data)
         println("Calcualting aggregate ATT with covariates set to $covariates.")
-        ATT = (hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat) \ combined_diff_data.y)[2]
+        if weights == true 
+            W = convert(Vector{Float64}, combined_diff_data.weights)
+            sum_W = sum(W)
+            for i in 1:length(W)
+                W[i] = W[i]/sum_W
+            end
+            W = Diagonal(W)
+        elseif weights == false
+            W = Diagonal(fill(1, nrow(combined_diff_data)))
+        end 
+        X = hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat)
+        Y = combined_diff_data.y
+        ATT = (inv(X' * W * X) * X' * W * Y)[2]
         treatment_time = combined_diff_data.common_treatment_time[1]
         results = DataFrame(treatment_time = treatment_time, agg_ATT = ATT)
         # Compute jackknife SE if there are at least 2 controls and 2 treatment silos
@@ -777,7 +791,20 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             jackknives_common = []
             for silo in combined_diff_data.silo_name
                 subset = combined_diff_data[combined_diff_data.silo_name .!= silo,:]
-                push!(jackknives_common, (hcat(fill(1.0, length(subset.treat)), subset.treat) \ subset.y)[2])
+                X = hcat(fill(1.0, length(subset.treat)), subset.treat)
+                Y = subset.y
+                W = convert(Vector{Float64}, subset.weights)
+                if weights == true 
+                    sum_W = sum(W)
+                    for i in 1:length(W)
+                        W[i] = W[i]/sum_W
+                    end
+                    W = Diagonal(W)
+                elseif weights == false
+                    W = Diagonal(fill(1, nrow(combined_diff_data)-1))
+                end
+
+                push!(jackknives_common, (inv(X' * W * X) * X' * W * Y)[2])
             end 
             jackknife_SE = sqrt(sum((jackknives_common .- ATT).^2) * ((length(jackknives_common) - 1)/length(jackknives_common)))
             results.jackknife_SE = [jackknife_SE]
@@ -809,10 +836,22 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
         end
         p_value_RI = 0
         for i in 1:length(RI_matrices)
-            ATT_RI = (hcat(fill(1.0, length(RI_matrices[i].treat)), RI_matrices[i].treat) \ RI_matrices[i].y)[2]
+            X = hcat(fill(1.0, length(RI_matrices[i].treat)), RI_matrices[i].treat)
+            Y = RI_matrices[i].y
+            if weights == true
+                W = convert(Vector{Float64}, RI_matrices[i].weights)
+                sum_W = sum(W)
+                for i in 1:length(W)
+                    W[i] = W[i]/sum_W
+                end
+                W = Diagonal(W)
+            elseif weights == false
+               W = Diagonal(fill(1, nrow(RI_matrices[i])))
+            end 
+            
+            ATT_RI = (inv(X' * W * X) * X' * W * Y)[2]
             p_value_RI += Int(abs(ATT_RI) >= abs(ATT))
-            println(Int(abs(ATT_RI) >= abs(ATT)))
-            println(ATT_RI)
+
         end
         p_value_RI = p_value_RI/ length(RI_matrices)
         results.p_value_RI = [p_value_RI]
