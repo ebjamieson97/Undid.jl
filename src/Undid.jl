@@ -771,17 +771,16 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
 
     if "common_treatment_time" in DataFrames.names(combined_diff_data)
         println("Calcualting aggregate ATT with covariates set to $covariates.")
-        if weights == true 
+        nrow_combined_diff_data = nrow(combined_diff_data)
+        if weights == true && nrow_combined_diff_data > 2
             W = convert(Vector{Float64}, combined_diff_data.weights)
             sum_W = sum(W)
-            for i in 1:length(W)
-                W[i] = W[i]/sum_W
-            end
+            W = W ./ sum_W
             W = Diagonal(W)
-        elseif weights == false
-            W = Diagonal(fill(1, nrow(combined_diff_data)))
+        elseif weights == false || nrow_combined_diff_data == 2 
+            W = Diagonal(fill(1, nrow_combined_diff_data))
         end 
-        X = hcat(fill(1.0, length(combined_diff_data.treat)), combined_diff_data.treat)
+        X = hcat(fill(1.0, nrow_combined_diff_data), combined_diff_data.treat)
         Y = combined_diff_data.y
         ATT = (inv(X' * W * X) * X' * W * Y)[2]
         treatment_time = combined_diff_data.common_treatment_time[1]
@@ -796,12 +795,10 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 W = convert(Vector{Float64}, subset.weights)
                 if weights == true 
                     sum_W = sum(W)
-                    for i in 1:length(W)
-                        W[i] = W[i]/sum_W
-                    end
+                    W = W ./ sum_W
                     W = Diagonal(W)
                 elseif weights == false
-                    W = Diagonal(fill(1, nrow(combined_diff_data)-1))
+                    W = Diagonal(fill(1, nrow_combined_diff_data-1))
                 end
 
                 push!(jackknives_common, (inv(X' * W * X) * X' * W * Y)[2])
@@ -838,15 +835,13 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
         for i in 1:length(RI_matrices)
             X = hcat(fill(1.0, length(RI_matrices[i].treat)), RI_matrices[i].treat)
             Y = RI_matrices[i].y
-            if weights == true
+            if weights == true && nrow_combined_diff_data > 2
                 W = convert(Vector{Float64}, RI_matrices[i].weights)
                 sum_W = sum(W)
-                for i in 1:length(W)
-                    W[i] = W[i]/sum_W
-                end
+                W = W ./ sum_W
                 W = Diagonal(W)
-            elseif weights == false
-               W = Diagonal(fill(1, nrow(RI_matrices[i])))
+            elseif weights == false || nrow_combined_diff_data == 2
+               W = Diagonal(fill(1, nrow_combined_diff_data))
             end 
             
             ATT_RI = (inv(X' * W * X) * X' * W * Y)[2]
@@ -957,7 +952,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
         return results
     end   
 
-end 
+end   
 
 ### Misc Functions ###
 function read_csv_data(filepath_to_csv_data::AbstractString)
