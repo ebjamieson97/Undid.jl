@@ -785,10 +785,17 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
         ATT = (inv(X' * W * X) * X' * W * Y)[2]
         treatment_time = combined_diff_data.common_treatment_time[1]
         results = DataFrame(treatment_time = treatment_time, agg_ATT = ATT)
-        # Compute jackknife SE if there are at least 2 controls and 2 treatment silos
-        if sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) >= 2
+        # Compute jackknife SE when there are at least 2 controls and 2 treatment silos
+        if (sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) >= 2) || (sum(combined_diff_data.treat .== 1) >= 2 && sum(combined_diff_data.treat .== 0) == 1) || (sum(combined_diff_data.treat .== 1) == 1 && sum(combined_diff_data.treat .== 0) >= 2)
             jackknives_common = []
-            for silo in combined_diff_data.silo_name
+            if sum(combined_diff_data.treat .== 1) == 1
+                silo_names = combined_diff_data[combined_diff_data.treat .== 0, "silo_name"]
+            elseif sum(combined_diff_data.treat .== 0) == 1
+                silo_names = combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]
+            else 
+                silo_names = combined_diff_data.silo_name
+            end
+            for silo in silo_names
                 subset = combined_diff_data[combined_diff_data.silo_name .!= silo,:]
                 X = hcat(fill(1.0, length(subset.treat)), subset.treat)
                 Y = subset.y
@@ -805,8 +812,8 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             end 
             jackknife_SE = sqrt(sum((jackknives_common .- ATT).^2) * ((length(jackknives_common) - 1)/length(jackknives_common)))
             results.jackknife_SE = [jackknife_SE]
-            results.num_silos = [length(jackknives_common)]
-            results.num_silos = Float64.(results.num_silos)
+            results.dof = [length(jackknives_common)-1]
+            results.dof = Float64.(results.dof)
 
         elseif sum(combined_diff_data.treat .== 1) == 1 && sum(combined_diff_data.treat .== 0) == 1
             if covariates == false 
