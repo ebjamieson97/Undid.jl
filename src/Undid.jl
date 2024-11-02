@@ -910,7 +910,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             ATT_silo = mean(silos_att)
             ATT_silo_se = sqrt(var(silos_att)/length(silos_att))
             jackknife_SE = sqrt(sum((jackknives_silo .-ATT_silo).^2) * ((length(jackknives_silo) - 1)/length(jackknives_silo)))
-            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = silos_att, ATT_s_se = silos_att_se, ATT_s_se_jackknife = silos_att_se_jack,
+            results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), ATT_s = Float64.(silos_att), ATT_s_se = Float64.(silos_att_se), ATT_s_se_jackknife = Float64.(silos_att_se_jack),
                                 agg_ATT = vcat([ATT_silo], fill(missing, length(silos_att) - 1)), agg_ATT_se = vcat([ATT_silo_se], fill(missing, length(silos_att) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(silos_att) - 1)))          
         elseif agg == "gt" || agg == "g"            
             ATT_vec = []
@@ -949,7 +949,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 ATT_gt = mean(ATT_vec)
                 ATT_gt_se = sqrt(var(ATT_vec)/length(ATT_vec))
                 jackknife_SE = sqrt(sum((jackknives_gt .-ATT_gt).^2) * ((length(jackknives_gt) - 1)/length(jackknives_gt)))
-                results = DataFrame(gt = gt_vec, ATT_gt = ATT_vec, ATT_gt_se = ATT_vec_se, ATT_gt_se_jackknife = ATT_vec_se_jack, agg_ATT = vcat([ATT_gt], fill(missing, length(ATT_vec) - 1)), agg_ATT_se = vcat([ATT_gt_se], fill(missing, length(ATT_vec) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_vec) - 1)))
+                results = DataFrame(gt = gt_vec, ATT_gt = Float64.(ATT_vec), ATT_gt_se = Float64.(ATT_vec_se), ATT_gt_se_jackknife = Float64.(ATT_vec_se_jack), agg_ATT = vcat([ATT_gt], fill(missing, length(ATT_vec) - 1)), agg_ATT_se = vcat([ATT_gt_se], fill(missing, length(ATT_vec) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_vec) - 1)))
                 results.gt = [join((parse_date_to_string(date1, combined_diff_data.date_format[1]), parse_date_to_string(date2, combined_diff_data.date_format[1])), ";") for (date1, date2) in results[!, "gt"]]
             end 
             if agg == "g"                
@@ -986,7 +986,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 agg_ATT = mean(ATT_g)
                 agg_ATT_se = sqrt(var(ATT_g)/length(ATT_g))
                 jackknife_SE = sqrt(sum((jackknives_g .-ATT_g).^2) * ((length(jackknives_g) - 1)/length(jackknives_g)))
-                results = DataFrame(g = parse_date_to_string.(gvars, combined_diff_data.date_format[1]), ATT_g = ATT_g, ATT_g_se = ATT_g_se, ATT_g_se_jackknife = ATT_g_se_jack,
+                results = DataFrame(g = parse_date_to_string.(gvars, combined_diff_data.date_format[1]), ATT_g = Float64.(ATT_g), ATT_g_se = Float64.(ATT_g_se), ATT_g_se_jackknife = Float64.(ATT_g_se_jack),
                                     agg_ATT = vcat([agg_ATT], fill(missing, length(ATT_g) - 1)), agg_ATT_se = vcat([agg_ATT_se], fill(missing, length(ATT_g) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_g) - 1)))
             end
         end 
