@@ -895,10 +895,14 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
 
                 jackknife_sub = []           
                 for i in 1:length(Y)
-                    X_sub = vcat(X[1:i-1, :], X[i+1:end, :])
-                    Y_sub = vcat(Y[1:i-1], Y[i+1:end])
-                    beta_hat_sub = X_sub \ Y_sub
-                    push!(jackknife_sub, beta_hat_sub[2])
+                    try
+                        X_sub = vcat(X[1:i-1, :], X[i+1:end, :])
+                        Y_sub = vcat(Y[1:i-1], Y[i+1:end])
+                        beta_hat_sub = X_sub \ Y_sub
+                        push!(jackknife_sub, beta_hat_sub[2])
+                    catch e
+                        continue 
+                    end 
                 end
                 push!(silos_att_se_jack ,sqrt(sum((jackknife_sub .- beta_hat[2]).^2) * ((length(jackknife_sub) - 1) / length(jackknife_sub))))
             end
@@ -933,10 +937,14 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 push!(gt_vec, gt)
                 jackknife_sub = []
                 for i in 1:length(Y)
-                    X_sub = vcat(X[1:i-1, :], X[i+1:end, :])
-                    Y_sub = vcat(Y[1:i-1], Y[i+1:end])
-                    beta_hat_sub = X_sub \ Y_sub
-                    push!(jackknife_sub, beta_hat_sub[2])
+                    try
+                        X_sub = vcat(X[1:i-1, :], X[i+1:end, :])
+                        Y_sub = vcat(Y[1:i-1], Y[i+1:end])
+                        beta_hat_sub = X_sub \ Y_sub
+                        push!(jackknife_sub, beta_hat_sub[2])
+                    catch e
+                        continue 
+                    end 
                 end
                 push!(ATT_vec_se_jack ,sqrt(sum((jackknife_sub .- beta_hat[2]).^2) * ((length(jackknife_sub) - 1) / length(jackknife_sub))))
 
@@ -974,10 +982,14 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                     push!(ATT_g_se, sqrt(compute_covariance_matrix(X, sigma_sq)[2,2]))
                     jackknife_sub = []
                     for i in 1:length(Y)
-                        X_sub = vcat(X[1:i-1, :], X[i+1:end, :])
-                        Y_sub = vcat(Y[1:i-1], Y[i+1:end])
-                        beta_hat_sub = X_sub \ Y_sub
-                        push!(jackknife_sub, beta_hat_sub[2])
+                        try
+                            X_sub = vcat(X[1:i-1, :], X[i+1:end, :])
+                            Y_sub = vcat(Y[1:i-1], Y[i+1:end])
+                            beta_hat_sub = X_sub \ Y_sub
+                            push!(jackknife_sub, beta_hat_sub[2])
+                        catch e
+                            continue 
+                        end 
                     end
                     push!(ATT_g_se_jack ,sqrt(sum((jackknife_sub .- beta_hat[2]).^2) * ((length(jackknife_sub) - 1) / length(jackknife_sub))))
                 end 
