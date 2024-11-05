@@ -1009,7 +1009,7 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
                 end
                 agg_ATT = mean(ATT_g)
                 agg_ATT_se = sqrt(var(ATT_g)/length(ATT_g))
-                jackknife_SE = sqrt(sum((jackknives_g .-ATT_g).^2) * ((length(jackknives_g) - 1)/length(jackknives_g)))
+                jackknife_SE = sqrt(sum((jackknives_g .- agg_ATT).^2) * ((length(jackknives_g) - 1)/length(jackknives_g)))
                 results = DataFrame(g = parse_date_to_string.(gvars, combined_diff_data.date_format[1]), g_n = Float64.(ATT_g_n), jack_n = Float64.(jack_n), ATT_g = Float64.(ATT_g), ATT_g_se = Float64.(ATT_g_se), ATT_g_se_jackknife = Float64.(ATT_g_se_jack),
                                     agg_ATT = vcat([agg_ATT], fill(missing, length(ATT_g) - 1)), agg_ATT_se = vcat([agg_ATT_se], fill(missing, length(ATT_g) - 1)), jackknife_SE = vcat([jackknife_SE], fill(missing, length(ATT_g) - 1)))
             end
