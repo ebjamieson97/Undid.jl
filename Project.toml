@@ -1,7 +1,7 @@
 name = "Undid"
 uuid = "b4918ae7-7c73-4176-80be-8405760cf2ee"  
 authors = ["Eric Jamieson <ericjamieson@cmail.carleton.ca>"]
-version = "0.2.9"
+version = "0.3.0"
 
 [deps]
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
