@@ -889,8 +889,8 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             elseif covariates == true 
                 SE = sqrt(sum(convert(Vector{Float64}, combined_diff_data.diff_var_covariates)))
             end
-            select!(results, Not(:agg_ATT_se))
-            results.se = [SE]
+            select!(results, Not(:agg_att_se))
+            results.stderr = [SE]
         end
 
 
