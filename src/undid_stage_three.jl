@@ -446,7 +446,10 @@ function calculate_agg_att_df(combined_diff_data::DataFrame; agg::AbstractString
             ATT_silo_se = sqrt(var(silos_att)/length(silos_att))
             jackknife_SE = sqrt(sum((jackknives_silo .-ATT_silo).^2) * ((length(jackknives_silo) - 1)/length(jackknives_silo)))
             results = DataFrame(silos = unique(combined_diff_data[combined_diff_data.treat .== 1, "silo_name"]), silo_n = Float64.(silos_n), jack_n = Float64.(jack_n), att_s = Float64.(silos_att), att_s_se = Float64.(silos_att_se), att_s_se_jackknife = Float64.(silos_att_se_jack),
-                                agg_att = vcat([ATT_silo], fill(NaN, length(silos_att) - 1)), agg_att_se = vcat([ATT_silo_se], fill(NaN, length(silos_att) - 1)), jackknife_se = vcat([jackknife_SE], fill(NaN, length(silos_att) - 1)))          
+                                agg_att = vcat([ATT_silo], fill(NaN, length(silos_att) - 1)), agg_att_se = vcat([ATT_silo_se], fill(NaN, length(silos_att) - 1)), jackknife_se = vcat([jackknife_SE], fill(NaN, length(silos_att) - 1)))
+            results.tuple_silos = custom_sort_order.(results.silos)
+            sort!(results,[order(:tuple_silos)])
+            select!(results, Not([:tuple_silos]))         
         elseif agg == "gt" || agg == "g"            
             ATT_vec = []
             ATT_n = []
@@ -757,3 +760,13 @@ function compute_n_unique_assignments(treatment_times::Vector, total_n_states::N
     end
     return num ÷ den                  
 end
+
+
+function custom_sort_order(s)
+    parsed = tryparse(Int, s)
+    if isnothing(parsed)
+        (0, lowercase(s))
+    else
+        (1, parsed)
+    end 
+end 
