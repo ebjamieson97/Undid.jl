@@ -1,4 +1,13 @@
-function undid_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::AbstractString, silo_data::DataFrame, time_column::AbstractString, outcome_column::AbstractString, date_format_local::AbstractString; renaming_dictionary = false, consider_covariates::Bool = true)
+function undid_stage_two(filepath_to_empty_diff_df::AbstractString,
+                         silo_name::AbstractString,
+                         silo_data::DataFrame,
+                         time_column::AbstractString,
+                         outcome_column::AbstractString, 
+                         date_format_local::AbstractString; 
+                         renaming_dictionary = false, 
+                         consider_covariates::Bool = true,
+                         anonymize_weights::Bool = false,
+                         anonymize_size::Number = 5)
     
     # Given a filepath to the empty_diff_df, the name of the local silo, and 
     # a dataframe of the local silo data, runs all the necessary Stage 2 functions
@@ -85,7 +94,11 @@ function undid_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::A
         end 
     end
 
-    filepath_and_diff_df = fill_diff_df(silo_name, empty_diff_df, silo_data, treatment_time = treatment_time, consider_covariates = consider_covariates)
+    filepath_and_diff_df = fill_diff_df(silo_name, empty_diff_df, silo_data,
+                                       treatment_time = treatment_time,
+                                       consider_covariates = consider_covariates,
+                                       anonymize_weights = anonymize_weights,
+                                       anonymize_size = anonymize_size)
 
     treated_or_not = empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (empty_diff_df[!, "treat"] .!= -1), "treat"][1]
     if treated_or_not == 1
@@ -104,9 +117,23 @@ function undid_stage_two(filepath_to_empty_diff_df::AbstractString, silo_name::A
 
 end 
 
-function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_data::DataFrame; treatment_time = false, consider_covariates::Bool = true)
+function fill_diff_df(silo_name::AbstractString,
+                      empty_diff_df::DataFrame,
+                      silo_data::DataFrame;
+                      treatment_time = false,
+                      consider_covariates::Bool = true,
+                      anonymize_weights::Bool = false,
+                      anonymize_size::Number = 5)
        
+    # Grab date format from empty_diff_df
     empty_diff_df_date_format = empty_diff_df.date_format[1]
+
+    # Assign weights and throw error commmon to both staggered adoption and common adoption
+    weights = empty_diff_df.weights[1]
+    if in(weights, ["diff", "att", "both"]) && !anonymize_weights
+        @warn "Setting weights to \"diff\", \"both\", or \"att\" will output a CSV file with counts of obs. for each difference calculation.\n 
+        Consider setting `anonymize_weights = true` to round counts to the nearest $anonymize_size."
+    end 
 
     # Allows for the option of ignoring covariates, even if specified initially in stage one.
     if consider_covariates == true
@@ -130,17 +157,26 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
         silo_data_copy.time = ifelse.(silo_data_copy.time .>= treatment_time, 1, 0)
         
         # Calculate weight for silo and throw to empty_diff_df
-        if empty_diff_df.weights[1] == "standard"
-            weight = sum(silo_data_copy.time) / nrow(silo_data_copy)
-            empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "weights"] .= weight
+        if in(weights, ["none", "diff", "att", "both", "standard"])
+            if weights == "standard"
+                @warn "\"standard\" is a deprecated weighting option!"
+                n = sum(silo_data_copy.time) / nrow(silo_data_copy)
+                empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "n"] .= n
+            elseif in(weights, ["diff", "both", "att"])
+                n = nrow(silo_data_copy)
+                if anonymize_weights
+                    n = max(anonymize_size, (anonymize_size * round(Int, n / anonymize_size)))
+                end
+                empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "n"] .= n
+            end 
+        else
+            error("Please select a valid weighting method. Options include:\"none\", \"diff\", \"att\", \"both\".")
         end 
 
         # Construct X and Y for regression
         X = convert(Matrix{Float64},hcat(fill(1,nrow(silo_data_copy)), silo_data_copy.time))
         Y = convert(Vector{Float64},silo_data_copy.outcome)
 
-
-        
         # Tell the next for loop to calculate diff_estimate with covariates if cov_on == 2
         if covariates == ["none"]
             cov_on = 0
@@ -153,8 +189,7 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
             X = convert(Matrix{Float64}, X)
             beta_hat = X\Y 
             resid = Y - X*beta_hat
-            sigma_sq = sum(resid.^2) / (length(resid) - length(beta_hat))
-            cov_beta_hat = compute_covariance_matrix(X, sigma_sq)
+            cov_beta_hat = compute_covariance_matrix(X, resid)
             
             if i == 1 # For no covariates
                 empty_diff_df[empty_diff_df[!, "silo_name"] .== silo_name, "diff_estimate"] .= beta_hat[2]
@@ -201,13 +236,35 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
             
             # Perform regression and throw gamma and var(gamma) to the empty_diff_df
             beta_hat = X\Y
-            resid = Y - X*beta_hat
-            sigma_sq = sum(resid.^2) / (length(resid) - length(beta_hat))            
-            cov_beta_hat = compute_covariance_matrix(X, sigma_sq, diff_times = diff_combo)
-            
-            empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& (in.(diff_combo[2], empty_diff_df[!, "diff_times"])), "diff_estimate"] .= beta_hat[2]
-            empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& (in.(diff_combo[2], empty_diff_df[!, "diff_times"])), "diff_var"] .= cov_beta_hat[2,2]
+            resid = Y - X*beta_hat           
+            cov_beta_hat = compute_covariance_matrix(X, resid, diff_times = diff_combo)
 
+            mask = (empty_diff_df[!, "silo_name"] .== silo_name) .&&
+                   (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& 
+                   (in.(diff_combo[2], empty_diff_df[!, "diff_times"]))
+            
+            empty_diff_df[mask, "diff_estimate"] .= beta_hat[2]
+            empty_diff_df[mask, "diff_var"] .= cov_beta_hat[2,2]
+            
+            # Assign weights
+            if in(weights, ["none", "diff", "att", "both"])
+                if in(weights, ["diff", "both"])
+                    n = length(Y)
+                    if anonymize_weights
+                        n = max(anonymize_size, (anonymize_size * round(Int, n / anonymize_size)))
+                    end
+                    empty_diff_df[mask, "n"] .= n
+                end 
+                if in(weights, ["att", "both"])
+                    n_t = sum((silo_subset.time .== 1))
+                    if anonymize_weights
+                        n_t = max(anonymize_size, (anonymize_size * round(Int, n_t / anonymize_size)))
+                    end 
+                    empty_diff_df[mask, "n_t"] .= n_t
+                end 
+            else
+                error("Please select a valid weighting method. Options include:\"none\", \"diff\", \"att\", \"both\".")
+            end
 
             if (covariates == ["none"]) 
                 # do nothing
@@ -227,10 +284,9 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
 
                 beta_hat = X\Y  
                 resid = Y - X*beta_hat
-                sigma_sq = sum(resid.^2) / (length(resid) - length(beta_hat))
-                cov_beta_hat = compute_covariance_matrix(X, sigma_sq, diff_times = diff_combo, covariates = empty_diff_df[!, "covariates"][1])              
-                empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& (in.(diff_combo[2], empty_diff_df[!, "diff_times"])), "diff_estimate_covariates"] .= beta_hat[2]
-                empty_diff_df[(empty_diff_df[!, "silo_name"] .== silo_name) .&& (in.(diff_combo[1], empty_diff_df[!, "diff_times"])) .&& (in.(diff_combo[2], empty_diff_df[!, "diff_times"])), "diff_var_covariates"] .= cov_beta_hat[2,2]
+                cov_beta_hat = compute_covariance_matrix(X, resid, diff_times = diff_combo, covariates = empty_diff_df[!, "covariates"][1])              
+                empty_diff_df[mask, "diff_estimate_covariates"] .= beta_hat[2]
+                empty_diff_df[mask, "diff_var_covariates"] .= cov_beta_hat[2,2]
             end
 
         end 
@@ -250,7 +306,6 @@ function fill_diff_df(silo_name::AbstractString, empty_diff_df::DataFrame, silo_
     filepath = save_as_csv("filled_diff_df_$silo_name.csv", empty_diff_df, "df", false)
     return filepath, empty_diff_df
 
-       
 end 
 
 function create_trends_df(empty_diff_df::DataFrame, silo_name::AbstractString, silo_data::DataFrame, freq; covariates::Vector{String} = ["none"], treatment_time = missing, date_format::AbstractString, consider_covariates::Bool = true)    

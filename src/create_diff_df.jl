@@ -48,9 +48,14 @@ differences must be calculated in order to compute the aggregate ATT. A
 CSV copy is saved to the specified directory which is then to be sent out
 to each silo.
 """
-function create_diff_df(csv::AbstractString, date_format::AbstractString, freq::AbstractString;
-                        covariates = false,   freq_multiplier = false, weights = "standard",
-                        filename = "empty_diff_df.csv", filepath = tempdir())
+function create_diff_df(csv::AbstractString,
+                        date_format::AbstractString, 
+                        freq::AbstractString;
+                        covariates = false,   
+                        freq_multiplier = false, 
+                        weights = "att",
+                        filename = "empty_diff_df.csv", 
+                        filepath = tempdir())
 
     # This is for flexible date handling for the parse_string_to_date function
     possible_formats_UNDID = ["yyyy/mm/dd", "yyyy-mm-dd", "yyyymmdd", "yyyy/dd/mm", "yyyy-dd-mm", "yyyyddmm", "dd/mm/yyyy", "dd-mm-yyyy", "ddmmyyyy", "mm/dd/yyyy", "mm-dd-yyyy", "mmddyyyy",
@@ -165,18 +170,25 @@ function create_diff_df(csv::AbstractString, date_format::AbstractString, freq::
             end
             push!(diff_df, [silo_name, treat, common_treatment_time, start_time, end_time])
         end
-        if weights == "standard"
-            diff_df.weights = fill("standard", nrow(diff_df))
-        else
-            error("Please select a valid weighting method. Options include: \"standard\"")
-        end 
     end
+
+    weights = lowercase(weights)
+    if in(weights, ["none", "diff", "att", "both", "standard"])
+        diff_df.weights = fill(weights, nrow(diff_df))
+        if weights == "standard"
+            @warn "\"standard\" is a deprecated weighting option!"
+        end
+    else
+        error("Please select a valid weighting method. Options include:\"none\", \"diff\", \"att\", \"both\".")
+    end 
 
     # Create the empty columns for the diff_esimates and diff_standard_errors
     diff_df.diff_estimate = Vector{Union{Missing, Float64}}(missing, nrow(diff_df))
     diff_df.diff_var = Vector{Union{Missing, Float64}}(missing, nrow(diff_df))
     diff_df.diff_estimate_covariates = Vector{Union{Missing, Float64}}(missing, nrow(diff_df))
     diff_df.diff_var_covariates = Vector{Union{Missing, Float64}}(missing, nrow(diff_df))
+    diff_df.n = Vector{Missing}(missing, nrow(diff_df))
+    diff_df.n_t = Vector{Missing}(missing, nrow(diff_df))
     
     # Add the covariates if they exist
     if covariates == false

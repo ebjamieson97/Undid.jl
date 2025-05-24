@@ -45,12 +45,13 @@ function read_csv_data(filepath_to_csv_data::AbstractString)
     return df_readin
 end
 
-function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates = false)
+function compute_covariance_matrix(X, resid; diff_times = false, covariates = false)
     X = convert(Matrix{Float64}, X)
     cov_beta_hat = zeros(size(X, 2), size(X, 2))
+    omega = Diagonal(resid .^ 2)
 
     try      
-        cov_beta_hat = inv(X' * X) * X' * sigma_sq * X * inv(X' * X)        
+        cov_beta_hat = inv(X' * X) * X' * omega * X * inv(X' * X)        
     catch ex 
         if (isa(ex, SingularException)) || (isa(ex, LAPACKException)) 
             det_Gram = det(X' * X)
@@ -64,7 +65,7 @@ function compute_covariance_matrix(X, sigma_sq; diff_times = false, covariates =
                 println("Warning!! Gram matrix (X' * X) is singular (det = $det_Gram), using pseudoinverse instead.")
             end 
             
-            cov_beta_hat = pinv(X' * X) * X' * sigma_sq * X * pinv(X' * X)
+            cov_beta_hat = pinv(X' * X) * X' * omega * X * pinv(X' * X)
         else
             println("Unexpected error occurred:", ex)
             rethrow(ex)

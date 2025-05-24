@@ -6,6 +6,7 @@ using DataFrames
 using DelimitedFiles
 using Dates
 using Random
+using Distributions
 
 include("undid_package_variables.jl")
 include("utils.jl")

@@ -42,11 +42,30 @@ function create_init_csv(names = String[], start_times = String[], end_times = S
                          filepath = tempdir())
     
     # Check input vectors are the same length
-    if length(names) == length(start_times) == length(end_times) == length(treatment_times)
-        # Do nothing
-    else 
-        error("Input vectors for names, start_times, end_times and treatment_times must all be the same length.") 
+    if !(length(names) == length(treatment_times))
+        error("Input vectors for names, and treatment_times must be the same length.")       
     end 
+    if length(end_times) == 1 || !(end_times isa Vector)
+        if !(end_times isa Vector)
+            end_times = [end_times]
+        end
+        end_times = end_times[1]
+        end_times = fill(end_times, length(names))
+    end 
+    if length(start_times) == 1 || !(start_times isa Vector)
+        if !(start_times isa Vector)
+            start_times = [start_times]
+        end
+        start_times = start_times[1]
+        start_times = fill(start_times, length(names))
+    end 
+    if (length(names) != length(start_times))
+        error("If start_times is a different length than names, it must be of length 1.")
+    end 
+    if (length(names) != length(end_times))
+        error("If start_times is a different length than names, it must be of length 1.")
+    end 
+    
 
     # Convert each element of the vectors to a string
     names, start_times, end_times, treatment_times = string.(names), string.(start_times), string.(end_times), string.(treatment_times)
