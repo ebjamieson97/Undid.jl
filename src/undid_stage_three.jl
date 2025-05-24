@@ -513,15 +513,6 @@ function compute_n_unique_assignments(treatment_times::Vector, total_n_states::N
     return num ÷ den                  
 end
 
-function custom_sort_order(s)
-    parsed = tryparse(Int, s)
-    if isnothing(parsed)
-        (0, lowercase(s))
-    else
-        (1, parsed)
-    end 
-end 
-
 function calculate_agg_att_g(diff_df::DataFrame,
                              weighting::AbstractString)
 
@@ -537,10 +528,10 @@ function calculate_agg_att_g(diff_df::DataFrame,
                         jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_agg_att = Vector{Union{Missing, Float64}}(missing, n_rows),
                         nperm = Vector{Union{Missing, Float64}}(missing, n_rows),
-                        att_g_se = Vector{Float64}(undef, n_rows),
-                        att_g_pval = Vector{Float64}(undef, n_rows),
-                        att_g_se_jackknife = Vector{Union{Missing, Float64}}(undef, n_rows),
-                        att_g_jknife_pval = Vector{Union{Missing, Float64}}(undef, n_rows),
+                        att_g_se = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_g_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_g_se_jackknife = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_g_jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_att_g = Vector{Union{Missing, Float64}}(missing, n_rows),
                         weights = Vector{Union{Nothing, Float64}}(nothing, n_rows))
     
@@ -584,6 +575,7 @@ function calculate_agg_att_gt(diff_df::DataFrame, weighting::AbstractString)
     unique_diffs = unique(select(diff_df, :t, :gvar))
     date_format = diff_df.date_format[1]
     n_rows = nrow(unique_diffs)
+
     results = DataFrame(gt = Vector{String}(undef, n_rows),
                         t = Vector{Date}(undef, n_rows),
                         g = Vector{Date}(undef, n_rows),
@@ -595,10 +587,10 @@ function calculate_agg_att_gt(diff_df::DataFrame, weighting::AbstractString)
                         jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_agg_att = Vector{Union{Missing, Float64}}(missing, n_rows),
                         nperm = Vector{Union{Missing, Float64}}(missing, n_rows),
-                        att_gt_se = Vector{Float64}(undef, n_rows),
-                        att_gt_pval = Vector{Float64}(undef, n_rows),
-                        att_gt_se_jackknife = Vector{Float64}(undef, n_rows),
-                        att_gt_jknife_pval = Vector{Float64}(undef, n_rows),
+                        att_gt_se = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_gt_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_gt_se_jackknife = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_gt_jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_att_gt = Vector{Union{Missing, Float64}}(missing, n_rows),
                         weights = Vector{Union{Nothing, Float64}}(nothing, n_rows))
 
@@ -656,10 +648,10 @@ function calculate_agg_att_silo(diff_df::DataFrame, weighting::AbstractString)
                         jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_agg_att = Vector{Union{Missing, Float64}}(missing, n_rows),
                         nperm = Vector{Union{Missing, Float64}}(missing, n_rows),
-                        att_s_se = Vector{Float64}(undef, n_rows),
-                        att_s_pval = Vector{Float64}(undef, n_rows),
-                        att_s_se_jackknife = Vector{Float64}(undef, n_rows),
-                        att_s_jknife_pval = Vector{Float64}(undef, n_rows),
+                        att_s_se = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_s_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_s_se_jackknife = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_s_jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_att_s = Vector{Union{Missing, Float64}}(missing, n_rows),
                         weights = Vector{Union{Nothing, Float64}}(nothing, n_rows))
 
@@ -720,10 +712,10 @@ function calculate_agg_att_sgt(diff_df::DataFrame, weighting::AbstractString)
                         jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_agg_att = Vector{Union{Missing, Float64}}(missing, n_rows),
                         nperm = Vector{Union{Missing, Float64}}(missing, n_rows),
-                        att_sgt_se = Vector{Float64}(undef, n_rows),
-                        att_sgt_pval = Vector{Float64}(undef, n_rows),
-                        att_sgt_se_jackknife = Vector{Float64}(undef, n_rows),
-                        att_sgt_jknife_pval = Vector{Float64}(undef, n_rows),
+                        att_sgt_se = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_sgt_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_sgt_se_jackknife = Vector{Union{Missing, Float64}}(missing, n_rows),
+                        att_sgt_jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_att_sgt = Vector{Union{Missing, Float64}}(missing, n_rows),
                         weights = Vector{Union{Nothing, Float64}}(nothing, n_rows),
                         sgt = Vector{AbstractString}(undef, n_rows))
