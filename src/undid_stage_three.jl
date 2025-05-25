@@ -718,7 +718,7 @@ function calculate_agg_att_sgt(diff_df::DataFrame, weighting::AbstractString)
                         att_sgt_jknife_pval = Vector{Union{Missing, Float64}}(missing, n_rows),
                         ri_pval_att_sgt = Vector{Union{Missing, Float64}}(missing, n_rows),
                         weights = Vector{Union{Nothing, Float64}}(nothing, n_rows),
-                        sgt = Vector{AbstractString}(undef, n_rows))
+                        sgt = Vector{String}(undef, n_rows))
 
     # Calculate sub aggregate level ATTs
     for i in 1:n_rows
